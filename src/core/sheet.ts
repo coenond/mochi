@@ -73,3 +73,67 @@ export const FALLBACK_SIT: Sprite = {
     '........oooooooo........',
   ],
 }
+
+/** The basket, empty until adoption: wicker and a cushion, no coat of its own. */
+const BASKET_PALETTE: Palette = {
+  coats: { golden: {}, light: {}, red: {} },
+  fixed: {
+    o: '#4a2a10',
+    q: '#b07a42',
+    d: '#7d5129',
+    l: '#d9a46a',
+    u: '#e07a6f',
+    v: '#b85a52',
+    m: '#f2a196',
+  },
+}
+
+// Basket letters: o outline, q wicker, d wicker shade, l wicker highlight, u cushion,
+// v cushion shade, m cushion highlight.
+// prettier-ignore
+export const BASKET: Sprite = {
+  palette: BASKET_PALETTE,
+  pixels: [
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '................................',
+    '......oooooooooooooooooooo......',
+    '....oollqqqqqqqqqqqqqqqqqdoo....',
+    '...olqqddddddddddddddddddqqdo...',
+    '..olqdoommmmmmmmmmmmmmmmoodqdo..',
+    '.oqqdommmuuuuuuuuuuuuuummmodqqo.',
+    'olqdouuuuuuuuuuuuuuuuuuuuuuodqdo',
+    'oqqdovvvvuuuuuuuuuuuuuuuvvvodqqo',
+    'ollllllllllllllllllllllllllllllo',
+    'oqdqqdqqdqqdqqdqqdqqdqqdqqdqqdqo',
+    '.oqdqqdqqdqqdqqdqqdqqdqqdqqdqqo.',
+    '..oddddddddddddddddddddddddddo..',
+    '....oooooooooooooooooooooooo....',
+  ],
+}
+
+// prettier-ignore
+export const FALLBACK_BASKET: Sprite = {
+  palette: BASKET_PALETTE,
+  pixels: [
+    '........................',
+    '........................',
+    '........................',
+    '........................',
+    '....o.............o.....',
+    '...oqo...........oqo....',
+    '...oqouuuuuuuuuuuoqo....',
+    '...oqqqqqqqqqqqqqqqo....',
+    '...oqoqoqoqoqoqoqoqo....',
+    '....ooooooooooooooo.....',
+  ],
+}

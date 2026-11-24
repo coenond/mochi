@@ -1,26 +1,30 @@
 // The engine shell (ADR-0005): turns the core's sprites into what each surface draws in
-// the band. No pet logic lives here.
+// the band, and the owner's `/pet` commands and coat pick into a kept pet. No pet logic
+// lives here.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, UiBlitResult } from 'claude-code'
+import type { EngineInterface, Register, RenderInput, UiBlitResult } from 'claude-code'
 
-import type { TerminalDrawsImages } from '../types'
+import type { CoatPick, TerminalDrawsImages } from '../types'
+import { petCommand, storedPet, type Pet } from '../src/core/adoption'
 import { toBase64 } from '../src/core/base64'
-import { FALLBACK_SIT, PET_SIT } from '../src/core/sheet'
+import { BASKET, FALLBACK_BASKET, FALLBACK_SIT, PET_SIT } from '../src/core/sheet'
 import {
+  COATS,
   toHalfBlocks,
   toRgba,
   toSvg,
   type Coat,
   type HalfBlockCell,
+  type Sprite,
 } from '../src/core/sprites'
 
-const PET_KEY = 'pet'
-const ALT = 'Mochi'
+/** The pet's key in the cross-session store, shared by every project and session. */
+const STORE_KEY = 'pet'
 
-/** The band is 3 text rows; the 32 by 24 pet fills 8 columns of them. */
+/** The band is 3 text rows; a 32 by 24 picture fills 8 columns of them. */
 const BAND_ROWS = 3
-const PET_COLUMNS = 8
+const PICTURE_COLUMNS = 8
 /** CSS pixels on the remote surfaces: 2 per sprite pixel. */
 const SVG_SCALE = 2
 
@@ -28,74 +32,197 @@ const SVG_SCALE = 2
 const PROBE_DELAY_MS = 300
 const PROBE_ATTEMPTS = 5
 
-// Until adoption (ticket #3) every pet is golden.
-const COAT: Coat = 'golden'
+const BASKET_HINT = '/pet adopt to adopt a pup'
+const COAT_KEY_PREFIX = 'coat:'
+
+/** What the band shows: its key, the picture, its half-block fallback and its alt. */
+type Picture = { key: string; sprite: Sprite; fallback: Sprite; coat: Coat; alt: string }
 
 const terminalDrawsImages = atom(
   { plugin: 'mochi', key: 'terminalDrawsImages' } as const,
   null as TerminalDrawsImages,
 )
+// Change a tag when its value's fields change: it declines what an earlier version kept.
+const pet = atom({ plugin: 'mochi', key: 'pet' } as const, null as Pet | null, {
+  shape: 'pet-1',
+})
+const coatPick = atom({ plugin: 'mochi', key: 'coatPick' } as const, null as CoatPick, {
+  shape: 'coat-pick-1',
+})
+
+/** Whether this session's image probe runs, and the picture last drawn, which it blits. */
+type Probe = { isRunning: boolean; shown: Picture | undefined }
 
 export const register: Register = on => {
-  let isProbing = false
+  const probe: Probe = { isRunning: false, shown: undefined }
+
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'pet',
+      description: 'Adopt and name your pup',
+      argumentHint: 'adopt <name> [coat] | name <name>',
+      immediate: true,
+    })
+    const kept = storedPet(await $.store.get(STORE_KEY))
+    await update($, pet, () => kept)
+
+    return next(e)
+  })
+
+  on('command.run', { command: 'pet' }, async ($, e) => {
+    // Read the store, not this session's copy: another session may have changed the pet.
+    const current = storedPet(await $.store.get(STORE_KEY))
+    await update($, pet, () => current)
+    const outcome = petCommand(e.args, current)
+
+    if (outcome.kind === 'adopted' || outcome.kind === 'renamed') {
+      await keep($, outcome.pet)
+    } else if (outcome.kind === 'pickCoat') {
+      await update($, coatPick, () => ({ name: outcome.name, coat: COATS[0]! }))
+    }
+
+    return { text: outcome.reply, isTextDisplayOnly: true }
+  })
+
+  // The pup shows the coat the focus is on, so the owner sees each shade before picking.
+  on('ui.focus', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const moved = await next(e)
+    const coat = COATS.find(one => e.element === COAT_KEY_PREFIX + one)
+    if (moved.deny === undefined && coat !== undefined) {
+      await update($, coatPick, pick => (pick === null ? null : { ...pick, coat })).catch(
+        () => undefined,
+      )
+    }
+
+    return moved
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
-    if (e.surface !== 'terminal') {
-      const { Svg } = $.ui.resolve(e)
-      return (
-        <Svg
-          source={toSvg(PET_SIT, COAT)}
-          alt={ALT}
-          width={PET_SIT.pixels[0]!.length * SVG_SCALE}
-          height={PET_SIT.pixels.length * SVG_SCALE}
-        />
-      )
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const adopted = await read($, pet)
+    if (adopted !== null) {
+      return drawPicture($, e, probe, petPicture(adopted.coat, adopted.name))
     }
 
-    const { Image, Raster } = $.ui.resolve(e)
-    const drawsImages = await read($, terminalDrawsImages)
-
-    if (drawsImages === false) {
-      const rows = toHalfBlocks(FALLBACK_SIT, COAT)
+    const pick = await read($, coatPick)
+    if (pick !== null) {
       return (
-        <Raster
-          key={PET_KEY}
-          columns={rows[0]!.length}
-          rows={rows.length}
-          cells={packCells(rows)}
-        />
+        <Box flexDirection="row" alignItems="center" columnGap={1}>
+          {await drawPicture($, e, probe, petPicture(pick.coat, pick.name))}
+          <Text dimColor>{pick.name}'s coat:</Text>
+          {COATS.map((coat, i) => (
+            <Button
+              key={COAT_KEY_PREFIX + coat}
+              label={coat}
+              hotkey={coat[0]}
+              autoFocus={i === 0 ? true : undefined}
+              onPress={() => keep($, { name: pick.name, coat })}
+            />
+          ))}
+        </Box>
       )
-    }
-
-    const source = petImageSource()
-    if (drawsImages === null && !isProbing) {
-      isProbing = true
-      $.clock.after(PROBE_DELAY_MS, async () => {
-        for (let attempt = 1; attempt <= PROBE_ATTEMPTS; attempt++) {
-          const result = await $.ui.blit({ requestId: e.requestId, key: PET_KEY, source })
-          if (await settleProbe($, result)) break
-          await $.clock.sleep(PROBE_DELAY_MS)
-        }
-        isProbing = false
-      })
     }
 
     return (
-      <Image
-        key={PET_KEY}
-        source={source}
-        columns={PET_COLUMNS}
-        rows={BAND_ROWS}
-        alt={ALT}
-      />
+      <Box flexDirection="row" alignItems="center" columnGap={1}>
+        {await drawPicture($, e, probe, BASKET_PICTURE)}
+        <Text dimColor>{BASKET_HINT}</Text>
+      </Box>
     )
   })
 }
 
-function petImageSource() {
-  const { rgba, width, height } = toRgba(PET_SIT, COAT)
+/**
+ * The picture as this surface draws it: an SVG on the remote surfaces, an image in a
+ * terminal that shows one, half-blocks in any other terminal (ADR-0007).
+ */
+async function drawPicture(
+  $: EngineInterface,
+  e: RenderInput<'AbovePrompt'>,
+  probe: Probe,
+  picture: Picture,
+) {
+  probe.shown = picture
+  const { key, sprite, fallback, coat, alt } = picture
+
+  if (e.surface !== 'terminal') {
+    const { Svg } = $.ui.resolve(e)
+    return (
+      <Svg
+        source={toSvg(sprite, coat)}
+        alt={alt}
+        width={sprite.pixels[0]!.length * SVG_SCALE}
+        height={sprite.pixels.length * SVG_SCALE}
+      />
+    )
+  }
+
+  const { Image, Raster } = $.ui.resolve(e)
+  const drawsImages = await read($, terminalDrawsImages)
+
+  if (drawsImages === false) {
+    const rows = toHalfBlocks(fallback, coat)
+    return (
+      <Raster
+        key={key}
+        columns={rows[0]!.length}
+        rows={rows.length}
+        cells={packCells(rows)}
+      />
+    )
+  }
+
+  if (drawsImages === null && !probe.isRunning) {
+    probe.isRunning = true
+    $.clock.after(PROBE_DELAY_MS, async () => {
+      for (let attempt = 1; attempt <= PROBE_ATTEMPTS; attempt++) {
+        const now = probe.shown ?? picture
+        const result = await $.ui.blit({
+          requestId: e.requestId,
+          key: now.key,
+          source: imageSource(now),
+        })
+        if (await settleProbe($, result)) break
+        await $.clock.sleep(PROBE_DELAY_MS)
+      }
+      probe.isRunning = false
+    })
+  }
+
+  return (
+    <Image
+      key={key}
+      source={imageSource(picture)}
+      columns={PICTURE_COLUMNS}
+      rows={BAND_ROWS}
+      alt={alt}
+    />
+  )
+}
+
+const BASKET_PICTURE: Picture = {
+  key: 'basket',
+  sprite: BASKET,
+  fallback: FALLBACK_BASKET,
+  coat: COATS[0]!,
+  alt: 'An empty dog basket',
+}
+
+function petPicture(coat: Coat, name: string): Picture {
+  return { key: 'pet', sprite: PET_SIT, fallback: FALLBACK_SIT, coat, alt: name }
+}
+
+/** Keeps the pet in the store for every session, and in this one's band. */
+async function keep($: EngineInterface, kept: Pet) {
+  await $.store.set(STORE_KEY, kept)
+  await update($, pet, () => kept)
+  await update($, coatPick, () => null)
+}
+
+function imageSource({ sprite, coat }: Picture) {
+  const { rgba, width, height } = toRgba(sprite, coat)
   return { rgba: toBase64(rgba), width, height }
 }
 

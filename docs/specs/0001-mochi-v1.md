@@ -13,7 +13,7 @@ A cozy pixel-art golden retriever puppy that keeps the owner company in the band
 ## Adoption
 
 - Before adoption the band shows the basket and the hint `/pet adopt to adopt a pup`.
-- `/pet adopt <name> [coat]` adopts the pet. Without a coat the owner picks one of the three golden shades.
+- `/pet adopt <name> [coat]` adopts the pet. Without a coat the owner picks one of the three golden shades in the band (hotkeys `g`, `l`, `r`); the pup shows the shade the focus is on.
 - One pet per owner, shared by all projects and sessions (ADR-0003).
 
 ## Behaviours
