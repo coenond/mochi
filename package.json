@@ -1,0 +1,30 @@
+{
+  "name": "mochi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A cozy pixel-art golden retriever puppy that lives above the Claude Code prompt.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@12.21.0",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "typecheck:plugin": "tsc -p tsconfig.plugin.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:plugin": "claude plugin test .",
+    "validate": "claude plugin validate .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm typecheck && pnpm test && pnpm format:check",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "sh scripts/pre-commit.sh"
+  },
+  "devDependencies": {
+    "prettier": "^3.10.1",
+    "simple-git-hooks": "^2.14.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

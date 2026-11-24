@@ -1,0 +1,6 @@
+{
+  "name": "mochi",
+  "version": "0.1.0",
+  "description": "A cozy pixel-art golden retriever puppy that lives in the band above the prompt.",
+  "types": "./types/index.d.ts"
+}
