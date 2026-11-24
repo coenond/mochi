@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mochi sprite sheet (prototype)</title>
+<style>
+  :root { --bg:#1e1f26; --panel:#272833; --ink:#e8e6e3; --dim:#8b8a93; --line:#3a3b47; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui, sans-serif; padding:28px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:32px 0 10px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+  p.lead { color:var(--dim); margin:0 0 20px; max-width:70ch; }
+  .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+  button { background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:4px 10px; font:inherit; cursor:pointer; }
+  button.on { border-color:#e8b86b; color:#e8b86b; }
+  .term { background:#16171d; border:1px solid var(--line); border-radius:8px; padding:12px 14px; font-family: "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace; font-size:14px; line-height:1; max-width:760px; }
+  .term .transcript { color:var(--dim); line-height:1.5; margin-bottom:10px; white-space:pre; }
+  .term pre { margin:0; font:inherit; line-height:1; letter-spacing:0; }
+  .term .prompt { margin-top:8px; border:1px solid var(--line); border-radius:6px; padding:8px 10px; line-height:1.4; color:var(--ink); }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; text-align:center; }
+  .card canvas { image-rendering: pixelated; display:block; margin:0 auto 6px; }
+  .card .name { font-weight:600; }
+  .card .meta { color:var(--dim); font-size:12px; }
+  .bad { outline:2px solid #e0565b; }
+</style>
+</head>
+<body>
+<h1>Mochi: plain-terminal fallback (v3)</h1>
+<p class="lead">Throwaway prototype for ticket #1, version 3: a golden retriever puppy, 24 by 10 pixels (five band rows). Round face with shiny eyes, long fluffy ears that hang past the cheeks, a fluffy chest and a feathery tail, and a quick four-step patter for walking. Coats are three golden shades. The terminal mock draws Mochi exactly as the band will, in half-block characters.</p>
+
+<h2>In the band, real size</h2>
+<div class="controls" id="coats"></div>
+<div class="controls" id="behaviours"></div>
+<div class="term">
+  <div class="transcript">⏺ Ran the tests: 42 passed.
+  All green. Anything else?</div>
+  <pre id="band"></pre>
+  <div class="prompt">&gt; <span style="color:var(--dim)">type here…</span></div>
+</div>
+
+<h2>Every behaviour, enlarged</h2>
+<div class="grid" id="sheet"></div>
+
+<script id="sprites">
+// Mochi sprites, prototype v2: 20 x 10 pixels (5 band rows), built from parts.
+// Pixels: '.' empty, '_' clear what is below, o outline, c coat, s ears and tail, l highlight,
+// x spot (coat on solid coats), w light (muzzle, belly, paws), e eye, h eye shine,
+// n nose, p pink (blush, tongue), k stick or kibble, b bowl, q basket, u cushion.
+(function () {
+  const W = 24, H = 10;
+
+  // Golden retriever shades. o outline, c coat, s ears and tail (a touch
+  // darker), l fluffy highlight, w muzzle, chest and paws.
+  const COATS = {
+    golden: { o:'#6a3b12', c:'#e9a640', s:'#c98428', l:'#f6cb73', x:'#e9a640', w:'#fbe2a9' },
+    light:  { o:'#6e4a25', c:'#f2cf8a', s:'#dcaa5c', l:'#fae5b5', x:'#f2cf8a', w:'#fff4dc' },
+    red:    { o:'#4a2410', c:'#c9722c', s:'#a4551c', l:'#e39a52', x:'#c9722c', w:'#f0c184' },
+  };
+  const FIXED = { e:'#1a120c', h:'#ffffff', n:'#1a120c', p:'#f2899f', k:'#9a6a38', b:'#6f93db', q:'#a5713f', u:'#e07a6f' };
+
+  // ---- parts -------------------------------------------------------------
+  // Head, 14 x 8: a round puppy face toward the viewer with big fluffy ears
+  // that hang past the cheeks and end in soft tufts.
+  function face({ top = 'he', bot = 'ee', topR, botR, blush = 'p', mouth = 'wwww' } = {}) {
+    topR = topR || top; botR = botR || bot;
+    return [
+      '.....oooooo.....',
+      '...oocllllcoo...',
+      '.ossoccccccosso.',
+      `osso${'c' + top + 'cc' + topR + 'c'}osso`,
+      `osso${'c' + bot + 'cc' + botR + 'c'}osso`,
+      `osso${blush}cwnnwc${blush}osso`,
+      `osso${'oc' + mouth + 'co'}osso`,
+      'sos...oooo...sos',
+    ];
+  }
+  const HEAD = {
+    open:    face(),
+    blink:   face({ top: 'cc', bot: 'oo' }),
+    happy:   face({ top: 'oo', bot: 'cc', mouth: 'wppw' }),
+    mouth:   face({ mouth: 'wppw' }),
+    sleepy:  face({ top: 'cc', bot: 'oo', blush: 'c' }),
+    worried: face({ top: 'co', topR: 'oc', bot: 'he', blush: 'c' }),
+    down:    face({ top: 'cc', bot: 'he' }),
+    yawn:    face({ top: 'cc', bot: 'oo', mouth: 'oppo' }),
+    wide:    face({ top: 'he', bot: 'ee', blush: 'c', mouth: 'woow' }),
+  };
+  // Head with the fluffy ears lifted one pixel: alert, not cat-like.
+  const EAR_COLS = [0, 1, 2, 13, 14, 15];
+  const perk = (g) => g.map((row, r) => [...row].map((ch, c) =>
+    EAR_COLS.includes(c) ? (g[r + 1] ? g[r + 1][c] : '.') : ch).join(''));
+
+  // Body seen from the side, 11 x 5, with a fluffy belly fringe.
+  const BODY = [
+    '.oooooooooo.',
+    'occcllllccco',
+    'occcccccccco',
+    'occccccccwwo',
+    '.oooooooooo.',
+  ];
+  // Body seen from the front while sitting, 10 x 5: a fluffy chest.
+  const BODY_SIT = [
+    '.oooooooo.',
+    'occwcwwcco',
+    'ocwwwwwwco',
+    'ocwwccwwco',
+    '.oooooooo.',
+  ];
+  // Loaf: body seen from the front while lying, 16 x 4.
+  const BODY_LOAF = [
+    '..oooooooooooo..',
+    '.occcllccccccco.',
+    'occcccccccccccco',
+    '.oooooooooooooo.',
+  ];
+  // A feathery plume of a tail.
+  const TAIL = {
+    up:   ['ss...', 'sss..', '.ssso', '..soo'],
+    wag:  ['.ss..', 'ssss.', '.ssso', '..soo'],
+    down: ['.....', '.....', '..sso', 'sssso'],
+    side: ['..ss', '.sss', 'ssso', '.so.'],
+  };
+
+  // ---- composing ---------------------------------------------------------
+  function blank() { return Array.from({ length: H }, () => Array(W).fill('.')); }
+  function stamp(cv, grid, x, y) {
+    grid.forEach((row, j) => [...row].forEach((ch, i) => {
+      if (ch === '.') return;
+      const X = x + i, Y = y + j;
+      if (X < 0 || X >= W || Y < 0 || Y >= H) return;
+      cv[Y][X] = ch === '_' ? '.' : ch;
+    }));
+  }
+  const done = (cv) => cv.map((r) => r.join(''));
+
+  // Standing, seen from the side with the face toward the viewer.
+  // legs: four [x, state] with state 'down', 'up' (lifted) or 'reach'.
+  // bob lifts body and head one pixel, so the legs show longer.
+  const LEGS_STAND = [[4, 'down'], [6, 'down'], [10, 'down'], [12, 'down']];
+  function standing({ head = HEAD.open, tail = TAIL.up, legs = LEGS_STAND, bob = 0, headDx = 0, headDy = 0, extra } = {}) {
+    const cv = blank();
+    const top = bob < 0 ? 4 : 3; // bob > 0 bounces the head; bob < 0 crouches
+    for (const [lx, st] of legs) {
+      if (st === 'down') { for (let y = top + 4; y < 9; y++) stamp(cv, ['w'], lx, y); stamp(cv, ['o'], lx, 9); }
+      if (st === 'up') { stamp(cv, ['w'], lx, top + 4); stamp(cv, ['o'], lx, top + 5); }
+    }
+    stamp(cv, tail, 0, top - 2);
+    stamp(cv, BODY, 2, top);
+    stamp(cv, head, 8 + headDx, 1 - bob + headDy);
+    if (extra) extra(cv);
+    return done(cv);
+  }
+
+  function sitting({ head = HEAD.open, tail = TAIL.side, headDx = 0, headDy = 0, extra } = {}) {
+    const cv = blank();
+    stamp(cv, tail, 19, 4);
+    stamp(cv, BODY_SIT, 7, 5);
+    stamp(cv, head, 4 + headDx, 0 + headDy);
+    if (extra) extra(cv);
+    return done(cv);
+  }
+
+  function lying({ head = HEAD.open, tail = TAIL.side, headDy = 0, extra } = {}) {
+    const cv = blank();
+    stamp(cv, tail, 20, 4);
+    stamp(cv, BODY_LOAF, 4, 6);
+    stamp(cv, head, 4, 2 + headDy);
+    stamp(cv, ['owwo'], 6, 9); stamp(cv, ['owwo'], 14, 9);
+    if (extra) extra(cv);
+    return done(cv);
+  }
+
+  // ---- behaviours --------------------------------------------------------
+  // Walk: a quick four-step patter. Diagonal pairs move together and the
+  // body bobs on the passing frames, so it reads as tiny busy steps.
+  const WALK_LEGS = [
+    [[4, 'down'], [7, 'up'], [10, 'up'], [12, 'down']],
+    [[5, 'down'], [6, 'down'], [10, 'down'], [11, 'down']],
+    [[4, 'up'], [7, 'down'], [10, 'down'], [12, 'up']],
+    [[5, 'down'], [6, 'down'], [10, 'down'], [11, 'down']],
+  ];
+  // move a whole frame up (dy < 0) or down by whole pixels
+  const shift = (frame, dy) => dy < 0 ? frame.slice(-dy).concat(Array(-dy).fill('.'.repeat(W))) : Array(dy).fill('.'.repeat(W)).concat(frame.slice(0, H - dy));
+  const WALK = WALK_LEGS.map((legs, i) => standing({ legs, bob: i % 2, tail: i % 2 ? TAIL.wag : TAIL.up }));
+
+  // ---- extra parts -------------------------------------------------------
+  const mirrorH = (g) => g.map((r) => [...r].reverse().join(''));
+  const faceless = (g) => g.map((r) => r.replace(/[ehnpw]/g, 'c'));
+  const flipV = (g) => g.slice().reverse();
+  const BOWL = ['.kkkk.', 'obbbbo', '.obbo.'];
+  const BOWL_EMPTY = ['......', 'obbbbo', '.obbo.'];
+  const BASKET = [
+    '...................',
+    '...................',
+    '...................',
+    '..o.............o..',
+    '.oqo...........oqo.',
+    '.oqouuuuuuuuuuuoqo.',
+    '.oqqqqqqqqqqqqqqqo.',
+    '.oqoqoqoqoqoqoqoqo.',
+    '..ooooooooooooooo..',
+  ];
+  const at = (g, x, y) => (cv) => stamp(cv, g, x, y);
+  const both = (...fs) => (cv) => fs.forEach((f) => f(cv));
+  const shake = (frame, dx) => frame.map((r) => dx > 0 ? '.' + r.slice(0, -1) : r.slice(1) + '.');
+  const still = (n, f) => Array(n).fill(f);
+  const LEGS_TUCK = [[4, 'up'], [6, 'up'], [10, 'up'], [12, 'up']];
+
+  const SIT = sitting(), SIT_BLINK = sitting({ head: HEAD.blink });
+  const LOAF = lying(), LOAF_BLINK = lying({ head: HEAD.blink });
+
+  const behaviours = {
+    // idle
+    walk:  { kind: 'idle', ms: 110, moves: true, emote: '', frames: WALK },
+    sit:   { kind: 'idle', ms: 600, emote: '', frames: [...still(5, SIT), SIT_BLINK] },
+    'lie down': { kind: 'idle', ms: 700, emote: '', frames: [...still(4, LOAF), LOAF_BLINK, lying({ tail: TAIL.wag })] },
+    sleep: { kind: 'idle', ms: 1100, emote: 'zzz', frames: [
+      lying({ head: HEAD.sleepy, tail: TAIL.down, headDy: 1 }),
+      lying({ head: HEAD.sleepy, tail: TAIL.down, headDy: 0 }) ] },
+    yawn:  { kind: 'idle', ms: 380, emote: '', frames: [SIT, sitting({ head: HEAD.blink, headDy: -1 }), sitting({ head: HEAD.yawn, headDy: -1 }), sitting({ head: HEAD.yawn, headDy: -1 }), SIT_BLINK, SIT] },
+    scratch: { kind: 'idle', ms: 120, emote: '', frames: [
+      sitting({ head: HEAD.happy, headDx: -1, extra: at(['so', 'oo'], 20, 3) }),
+      sitting({ head: HEAD.happy, headDx: -1, extra: at(['so', 'oo'], 20, 4) }) ] },
+
+    // tricks
+    spin: { kind: 'trick', ms: 140, emote: '', frames: [
+      standing(), SIT, mirrorH(standing()), sitting({ head: faceless(HEAD.open), tail: TAIL.wag }), standing()] },
+    'roll over': { kind: 'trick', ms: 230, emote: '', frames: [
+      LOAF,
+      lying({ head: HEAD.happy, headDy: 1 }),
+      lying({ head: flipV(HEAD.happy), headDy: 1, extra: at(['o.o........o.o', 'w.w........w.w'], 5, 4) }),
+      lying({ head: flipV(HEAD.mouth), headDy: 1, extra: at(['o.o........o.o', 'w.w........w.w'], 5, 4) }),
+      LOAF] },
+    'play bow': { kind: 'trick', ms: 200, emote: '', frames: [
+      standing({ head: HEAD.mouth, headDy: 2, legs: [[3, 'down'], [5, 'down']], tail: TAIL.up }),
+      standing({ head: HEAD.mouth, headDy: 2, legs: [[3, 'down'], [5, 'down']], tail: TAIL.wag }) ] },
+    hop: { kind: 'trick', ms: 130, emote: '', frames: [
+      standing({ legs: [[3, 'down'], [5, 'down'], [9, 'down'], [11, 'down']] }),
+      standing({ head: HEAD.happy, bob: -1 }),
+      shift(standing({ head: perk(HEAD.mouth), legs: LEGS_TUCK, tail: TAIL.wag }), -1),
+      shift(standing({ head: perk(HEAD.mouth), legs: LEGS_TUCK, tail: TAIL.up }), -1),
+      standing({ head: HEAD.happy, bob: -1 }),
+      standing() ] },
+
+    // reactions
+    curious: { kind: 'reaction', ms: 500, emote: '…?', frames: [
+      sitting({ head: perk(HEAD.open) }), sitting({ head: perk(HEAD.open), headDx: 1 }),
+      sitting({ head: perk(HEAD.open), headDx: 1 }), sitting({ head: perk(HEAD.blink), headDx: 1 }) ] },
+    'thinking: sniff': { kind: 'reaction', ms: 200, moves: true, emote: '*sniff*', frames: [
+      standing({ head: HEAD.down, headDy: 2, legs: WALK_LEGS[0] }),
+      standing({ head: HEAD.down, headDy: 2, legs: WALK_LEGS[1] }),
+      standing({ head: HEAD.down, headDy: 1, legs: WALK_LEGS[2] }),
+      standing({ head: HEAD.down, headDy: 2, legs: WALK_LEGS[1] }) ] },
+    'thinking: watch': { kind: 'reaction', ms: 700, emote: '', frames: [
+      sitting({ head: perk(HEAD.open) }), sitting({ head: perk(HEAD.open) }), sitting({ head: perk(HEAD.open) }), sitting({ head: perk(HEAD.blink) })] },
+    'thinking: carry': { kind: 'reaction', ms: 120, moves: true, emote: '', frames: WALK_LEGS.map((legs, i) =>
+      standing({ head: HEAD.happy, legs, bob: i % 2, tail: i % 2 ? TAIL.wag : TAIL.up, extra: at(['kkkkkkkkkkkkkk'], 9, 7 - (i % 2)) })) },
+    'thinking: wait': { kind: 'reaction', ms: 900, emote: '…', frames: [...still(3, LOAF), LOAF_BLINK] },
+    worried: { kind: 'reaction', ms: 600, emote: '…', frames: [
+      sitting({ head: HEAD.worried, tail: TAIL.down, headDy: 1 }),
+      sitting({ head: HEAD.worried, tail: TAIL.down, headDy: 1, headDx: -1 }) ] },
+    scared: { kind: 'reaction', ms: 80, emote: '!!', frames: [
+      lying({ head: HEAD.wide, tail: TAIL.down, headDy: 1 }),
+      shake(lying({ head: HEAD.wide, tail: TAIL.down, headDy: 1 }), 1) ] },
+    celebrating: { kind: 'reaction', ms: 120, emote: '*wag wag*', frames: [
+      standing({ head: HEAD.happy, bob: -1 }),
+      shift(standing({ head: perk(HEAD.mouth), legs: LEGS_TUCK, tail: TAIL.wag }), -1),
+      shift(standing({ head: perk(HEAD.mouth), legs: LEGS_TUCK, tail: TAIL.up }), -1),
+      standing({ head: HEAD.happy, bob: -1 }),
+      standing({ head: HEAD.mouth, tail: TAIL.wag }), standing({ head: HEAD.mouth, tail: TAIL.up }) ] },
+    confused: { kind: 'reaction', ms: 650, emote: '?', frames: [
+      sitting({ head: HEAD.open, headDx: 1 }), sitting({ head: HEAD.open, headDx: 1 }), sitting({ head: HEAD.blink, headDx: 1 }), sitting({ head: HEAD.open, headDx: -1 }) ] },
+    eating: { kind: 'reaction', ms: 240, emote: '*crunch*', frames: [
+      standing({ head: HEAD.down, headDy: 2, extra: at(BOWL, 18, 7) }),
+      standing({ head: HEAD.mouth, headDy: 1, extra: at(BOWL_EMPTY, 18, 7) }) ] },
+    'being petted': { kind: 'reaction', ms: 200, emote: '<3', frames: [
+      sitting({ head: HEAD.happy, tail: TAIL.wag }), sitting({ head: HEAD.happy, tail: TAIL.side, headDy: 1 }) ] },
+    basket: { kind: 'adoption', ms: 1000, emote: '', frames: [(() => { const cv = blank(); stamp(cv, BASKET, 2, 1); return done(cv); })()] },
+  };
+
+  function color(ch, coat) {
+    if (ch === '.' || ch === '_') return null;
+    return COATS[coat][ch] || FIXED[ch] || '#ff00ff';
+  }
+  const resolve = (f) => f;
+  globalThis.MOCHI = { W, H, COATS, behaviours, color, resolve, mirrorH, parts: { HEAD, BODY, TAIL, standing, sitting, lying, perk, stamp, blank, done } };
+})();
+</script>
+<script>
+const M = MOCHI, B = M.behaviours, W = M.W, H = M.H, COATS = M.COATS;
+const BG = '#16171d';
+const mirror = (f) => f.map(r => [...r].reverse().join(''));
+function frameAt(beh, i, facingLeft) {
+  const f = beh.frames[i % beh.frames.length];
+  return facingLeft ? mirror(f) : f;
+}
+const color = M.color;
+function valid(beh) {
+  return beh.frames.every(f => f.length === H && f.every(r => r.length === W));
+}
+
+// Half-block text: each cell is two stacked pixels.
+function toCells(frame, coat) {
+  const rows = [];
+  for (let y = 0; y < H; y += 2) {
+    let html = '';
+    for (let x = 0; x < W; x++) {
+      const t = color(frame[y][x], coat), b = color(frame[y + 1][x], coat);
+      if (!t && !b) html += ' ';
+      else if (t && !b) html += `<span style="color:${t}">▀</span>`;
+      else if (!t && b) html += `<span style="color:${b}">▄</span>`;
+      else html += `<span style="color:${t};background:${b}">▀</span>`;
+    }
+    rows.push(html);
+  }
+  return rows;
+}
+
+// Band demo
+const BAND_W = 72;
+let coat = 'golden', current = 'walk', tick = 0, x = 4, dir = 1, auto = true, autoUntil = 0;
+const coatBox = document.getElementById('coats'), behBox = document.getElementById('behaviours');
+Object.keys(COATS).forEach(k => {
+  const b = document.createElement('button'); b.textContent = k;
+  b.onclick = () => { coat = k; render(); refreshButtons(); drawSheet(); };
+  b.dataset.coat = k; coatBox.appendChild(b);
+});
+const autoBtn = document.createElement('button'); autoBtn.textContent = 'auto (idle life)';
+autoBtn.onclick = () => { auto = true; refreshButtons(); }; behBox.appendChild(autoBtn);
+Object.keys(B).forEach(k => {
+  const b = document.createElement('button'); b.textContent = k; b.dataset.beh = k;
+  b.onclick = () => { auto = false; current = k; tick = 0; refreshButtons(); };
+  behBox.appendChild(b);
+});
+function refreshButtons() {
+  coatBox.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.coat === coat));
+  behBox.querySelectorAll('button').forEach(b => b.classList.toggle('on', auto ? b === autoBtn : b.dataset.beh === current));
+}
+
+const IDLE = [['walk', 6], ['sit', 3], ['lie down', 2], ['sleep', 1], ['yawn', 1], ['scratch', 1], ['spin', .4], ['hop', .4], ['play bow', .4], ['roll over', .3]];
+function pickIdle() {
+  const total = IDLE.reduce((s, [, w]) => s + w, 0);
+  let r = Math.random() * total;
+  for (const [k, w] of IDLE) { if ((r -= w) <= 0) return k; }
+  return 'sit';
+}
+
+const band = document.getElementById('band');
+function render() {
+  const beh = B[current];
+  const f = frameAt(beh, tick, dir < 0);
+  const cells = toCells(f, coat);
+  const shake = beh.shake && tick % 2 ? 1 : 0;
+  const pad = ' '.repeat(Math.max(0, x + shake));
+  const emote = beh.emote ? `<span style="color:#7d7c86">${beh.emote}</span>` : '';
+  band.innerHTML = cells.map((r, i) => pad + r + (i === 0 ? '  ' + emote : '')).join('\n');
+}
+let last = 0, acc = 0;
+function loop(t) {
+  const beh = B[current];
+  if (t - last >= beh.ms) {
+    last = t; tick++;
+    if (beh.moves) {
+      x += dir;
+      if (x > BAND_W - W - 12 || x < 0) { dir = -dir; x += 2 * dir; }
+    }
+    if (auto && t > autoUntil) {
+      current = pickIdle(); tick = 0;
+      if (Math.random() < .5) dir = -dir;
+      const b = B[current];
+      autoUntil = t + (b.kind === 'trick' ? b.frames.length * b.ms * 2 : 2500 + Math.random() * 4000);
+    }
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+
+// Enlarged sheet
+const SCALE = 7;
+const sheet = document.getElementById('sheet');
+const cards = [];
+function drawSheet() {
+  sheet.innerHTML = ''; cards.length = 0;
+  for (const [name, beh] of Object.entries(B)) {
+    const card = document.createElement('div'); card.className = 'card';
+    if (!valid(beh)) card.classList.add('bad');
+    const cv = document.createElement('canvas'); cv.width = W * SCALE; cv.height = H * SCALE;
+    card.appendChild(cv);
+    card.insertAdjacentHTML('beforeend', `<div class="name">${name}</div><div class="meta">${beh.kind} · ${beh.frames.length} frames${beh.emote ? ' · ' + beh.emote : ''}</div>`);
+    sheet.appendChild(card);
+    cards.push({ cv, beh, i: 0, last: 0 });
+  }
+}
+function paint(cv, frame) {
+  const g = cv.getContext('2d');
+  g.fillStyle = BG; g.fillRect(0, 0, cv.width, cv.height);
+  frame.forEach((row, y) => [...row].forEach((ch, x) => {
+    const c = color(ch, coat); if (!c) return;
+    g.fillStyle = c; g.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+  }));
+}
+function sheetLoop(t) {
+  for (const card of cards) {
+    if (t - card.last >= card.beh.ms) {
+      card.last = t; card.i++;
+      paint(card.cv, frameAt(card.beh, card.i, false));
+    }
+  }
+  requestAnimationFrame(sheetLoop);
+}
+
+refreshButtons(); render(); drawSheet();
+requestAnimationFrame(loop); requestAnimationFrame(sheetLoop);
+</script>
+</body>
+</html>

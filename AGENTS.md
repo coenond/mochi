@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Mochi is a Claude Code mod: a cozy 8-bit pet dog that lives in the band above the prompt. This is an AI-engineering project, not a vibe-coding project. Agents work in small, verified, vertical steps that a human has agreed to.
+Mochi is a Claude Code mod: a cozy pixel-art golden retriever puppy that lives in the band above the prompt. This is an AI-engineering project, not a vibe-coding project. Agents work in small, verified, vertical steps that a human has agreed to.
 
 ## Workflow
 

@@ -1,6 +1,6 @@
 # Glossary
 
-Mochi is a small 8-bit pet dog that lives above the Claude Code prompt and keeps the owner company while they work. Domain vocabulary only. No implementation details.
+Mochi is a small pixel-art golden retriever puppy that lives above the Claude Code prompt and keeps the owner company while they work. Domain vocabulary only. No implementation details.
 
 ## The pet
 
@@ -10,7 +10,7 @@ _Avoid_: dog, tamagotchi, character, avatar
 **Owner**: the person using Claude Code who adopted the pet.
 _Avoid_: user, player
 
-**Coat**: the pet's colour, chosen at adoption. One of: cream, brown, black, spotted.
+**Coat**: the pet's shade of golden, chosen at adoption. One of: golden, light, red.
 _Avoid_: skin, theme, colour scheme
 
 **Adoption**: the moment the owner gives a new pet its name and coat. Before adoption there is only the basket.
@@ -29,7 +29,7 @@ _Avoid_: state, animation, mode, action
 
 **Trick**: a short, playful behaviour: spin, roll over, play bow, hop. Done now and then on its own, and always after a treat.
 
-**Reaction**: a behaviour caused by something happening: curious, thinking, worried, scared, celebrating, confused, eating, being petted.
+**Reaction**: a behaviour caused by something happening: curious, thinking, worried, celebrating, confused, eating, being petted.
 
 **Emote**: the short, dim text beside the pet that hints at how it feels, such as `*sniff*`, `zzz` or `hungry…`. Never a sentence, never a request.
 _Avoid_: speech bubble, message, notification
