@@ -1,16 +1,32 @@
 // The engine shell (ADR-0005): turns the core's sprites into what each surface draws in
-// the band, and the owner's `/pet` commands and coat pick into a kept pet. No pet logic
-// lives here.
+// the band, the owner's `/pet` commands and coat pick into a kept pet, and the clock into
+// the pet's idle life. No pet logic lives here.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, UiBlitResult } from 'claude-code'
 
-import type { CoatPick, TerminalDrawsImages } from '../types'
+import type { CoatPick, IdlePose, TerminalDrawsImages } from '../types'
 import { petCommand, storedPet, type Pet } from '../src/core/adoption'
 import { toBase64 } from '../src/core/base64'
-import { BASKET, FALLBACK_BASKET, FALLBACK_SIT, PET_SIT } from '../src/core/sheet'
+import {
+  nextSpell,
+  poseAt,
+  seededRandom,
+  spellEndsAt,
+  type Random,
+  type Spell,
+} from '../src/core/idle'
+import {
+  BASKET,
+  FALLBACK_BASKET,
+  FALLBACK_IDLE,
+  FALLBACK_SIT,
+  PET_IDLE,
+  PET_SIT,
+} from '../src/core/sheet'
 import {
   COATS,
+  mirror,
   toHalfBlocks,
   toRgba,
   toSvg,
@@ -25,6 +41,8 @@ const STORE_KEY = 'pet'
 /** The band is 3 text rows; a 32 by 24 picture fills 8 columns of them. */
 const BAND_ROWS = 3
 const PICTURE_COLUMNS = 8
+/** The half-block fallback is 24 pixels wide, a column each. */
+const FALLBACK_COLUMNS = 24
 /** CSS pixels on the remote surfaces: 2 per sprite pixel. */
 const SVG_SCALE = 2
 
@@ -49,12 +67,29 @@ const pet = atom({ plugin: 'mochi', key: 'pet' } as const, null as Pet | null, {
 const coatPick = atom({ plugin: 'mochi', key: 'coatPick' } as const, null as CoatPick, {
   shape: 'coat-pick-1',
 })
+const STILL: IdlePose = { behaviour: 'sit', frame: 0, x: 0, facing: 'right' }
+const idlePose = atom({ plugin: 'mochi', key: 'idlePose' } as const, STILL, {
+  shape: 'idle-pose-1',
+})
 
 /** Whether this session's image probe runs, and the picture last drawn, which it blits. */
 type Probe = { isRunning: boolean; shown: Picture | undefined }
 
+/**
+ * This session's idle life: the spell playing, the columns the pet can move in (the band
+ * says at each drawing), and the pose last written. A reload starts it over.
+ */
+type Life = {
+  isRunning: boolean
+  spell: Spell | null
+  room: number
+  random: Random | null
+  shown: IdlePose | null
+}
+
 export const register: Register = on => {
   const probe: Probe = { isRunning: false, shown: undefined }
+  const life: Life = { isRunning: false, spell: null, room: 0, random: null, shown: null }
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -65,6 +100,7 @@ export const register: Register = on => {
     })
     const kept = storedPet(await $.store.get(STORE_KEY))
     await update($, pet, () => kept)
+    if (kept !== null) live($, life)
 
     return next(e)
   })
@@ -76,7 +112,7 @@ export const register: Register = on => {
     const outcome = petCommand(e.args, current)
 
     if (outcome.kind === 'adopted' || outcome.kind === 'renamed') {
-      await keep($, outcome.pet)
+      await keep($, life, outcome.pet)
     } else if (outcome.kind === 'pickCoat') {
       await update($, coatPick, () => ({ name: outcome.name, coat: COATS[0]! }))
     }
@@ -103,7 +139,15 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const adopted = await read($, pet)
     if (adopted !== null) {
-      return drawPicture($, e, probe, petPicture(adopted.coat, adopted.name))
+      const pose = await read($, idlePose)
+      const isFallback =
+        e.surface === 'terminal' && (await read($, terminalDrawsImages)) === false
+      life.room = e.props.bodyColumns - (isFallback ? FALLBACK_COLUMNS : PICTURE_COLUMNS)
+      return (
+        <Box marginLeft={Math.max(0, Math.min(pose.x, life.room))}>
+          {await drawPicture($, e, probe, idlePicture(adopted, pose))}
+        </Box>
+      )
     }
 
     const pick = await read($, coatPick)
@@ -118,7 +162,7 @@ export const register: Register = on => {
               label={coat}
               hotkey={coat[0]}
               autoFocus={i === 0 ? true : undefined}
-              onPress={() => keep($, { name: pick.name, coat })}
+              onPress={() => keep($, life, { name: pick.name, coat })}
             />
           ))}
         </Box>
@@ -214,11 +258,81 @@ function petPicture(coat: Coat, name: string): Picture {
   return { key: 'pet', sprite: PET_SIT, fallback: FALLBACK_SIT, coat, alt: name }
 }
 
+/** The pet in its idle pose. The fallback faces the owner, so only real pixels turn. */
+function idlePicture(
+  { coat, name }: Pet,
+  { behaviour, frame, facing }: IdlePose,
+): Picture {
+  const frames = PET_IDLE[behaviour]
+  const fallbacks = FALLBACK_IDLE[behaviour]
+  const sprite = frames[frame % frames.length]!
+  return {
+    key: 'pet',
+    sprite: facing === 'left' ? turned(sprite) : sprite,
+    fallback: fallbacks[frame % fallbacks.length]!,
+    coat,
+    alt: name,
+  }
+}
+
+const TURNED = new WeakMap<Sprite, Sprite>()
+
+function turned(sprite: Sprite): Sprite {
+  let left = TURNED.get(sprite)
+  if (left === undefined) {
+    left = mirror(sprite)
+    TURNED.set(sprite, left)
+  }
+  return left
+}
+
 /** Keeps the pet in the store for every session, and in this one's band. */
-async function keep($: EngineInterface, kept: Pet) {
+async function keep($: EngineInterface, life: Life, kept: Pet) {
   await $.store.set(STORE_KEY, kept)
   await update($, pet, () => kept)
   await update($, coatPick, () => null)
+  live($, life)
+}
+
+/** Starts the idle life on the clock, once per session. */
+function live($: EngineInterface, life: Life) {
+  if (life.isRunning) return
+  life.isRunning = true
+  void tick($, life)
+}
+
+/**
+ * Draws the pose for now and waits for the next: a frame later while the pet moves, the
+ * spell's end while it holds still, so a still pet costs no redraws at all.
+ */
+async function tick($: EngineInterface, life: Life) {
+  try {
+    const now = await $.clock.now()
+    // Seeded from the clock: a session's idle life replays under a test's clock.
+    life.random ??= seededRandom(now)
+    if (life.spell === null || now >= spellEndsAt(life.spell)) {
+      life.spell = nextSpell(life.spell, now, life.room, life.random)
+    }
+    const { behaviour, frame, x, facing, nextAt } = poseAt(life.spell, now)
+    const pose: IdlePose = { behaviour, frame, x, facing }
+    if (!isSamePose(life.shown, pose)) {
+      await update($, idlePose, () => pose)
+      life.shown = pose
+    }
+    $.clock.after(Math.max(1, nextAt - now), () => tick($, life))
+  } catch {
+    life.isRunning = false
+  }
+}
+
+function isSamePose(a: IdlePose | null, b: IdlePose): boolean {
+  return (
+    a !== null &&
+    a.behaviour === b.behaviour &&
+    a.frame === b.frame &&
+    a.x === b.x &&
+    a.facing === b.facing
+  )
 }
 
 function imageSource({ sprite, coat }: Picture) {

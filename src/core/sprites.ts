@@ -91,6 +91,15 @@ export function toHalfBlocks(sprite: Sprite, coat: Coat): HalfBlockCell[][] {
   return rows
 }
 
+/** The sprite turned to face the other way. */
+export function mirror(sprite: Sprite): Sprite {
+  const width = widthOf(sprite)
+  return {
+    ...sprite,
+    pixels: sprite.pixels.map(row => [...row.padEnd(width, EMPTY)].reverse().join('')),
+  }
+}
+
 function halfBlock(top: number | null, bottom: number | null): HalfBlockCell {
   if (top === null && bottom === null) return { glyph: ' ', fg: null, bg: null }
   if (top === null) return { glyph: '▄', fg: bottom, bg: null }

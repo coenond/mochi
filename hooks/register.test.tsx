@@ -237,3 +237,53 @@ test('/pet adopt sees a pet another session adopted since this one started', asy
   expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('Mochi')
   await ui.unmount()
 })
+
+/** Watches the band on the desktop app for `ms`, a frame at a time: x and picture. */
+async function watchBand($: Engine, on: On, ms: number, bodyColumns = 80) {
+  const clock = mock.clock(on)
+  await startSession($, on, { pet: MOCHI })
+  const ui = await $.ui.mount({
+    ...BAND,
+    surface: 'desktop',
+    props: { ...BAND.props, bodyColumns },
+  })
+  const seen: { x: number; source: string }[] = []
+  for (let t = 0; t < ms; t += 160) {
+    const box = await ui.find({ type: 'Box' })
+    const pet = await ui.find({ type: 'Svg' })
+    seen.push({
+      x: Number(box?.props.marginLeft ?? 0),
+      source: String(pet?.props.source),
+    })
+    await clock.advance(160)
+  }
+  await ui.unmount()
+  return seen
+}
+
+test('the pet walks about the band on its own', async ($, on) => {
+  const seen = await watchBand($, on, 10 * 60_000)
+
+  const spots = new Set(seen.map(one => one.x))
+  expect(spots.size).toBeGreaterThan(10)
+  expect(Math.max(...spots)).toBeLessThanOrEqual(80 - 8)
+})
+
+test('between spells the pet holds still, with nothing to redraw', async ($, on) => {
+  const seen = await watchBand($, on, 10 * 60_000)
+
+  let still = 0
+  let longest = 0
+  for (let i = 1; i < seen.length; i++) {
+    const same = seen[i]!.x === seen[i - 1]!.x && seen[i]!.source === seen[i - 1]!.source
+    still = same ? still + 1 : 0
+    longest = Math.max(longest, still)
+  }
+  expect(longest * 160).toBeGreaterThan(10_000)
+})
+
+test('in a band narrower than the pet it stays at the left edge', async ($, on) => {
+  const seen = await watchBand($, on, 3 * 60_000, 6)
+
+  expect(new Set(seen.map(one => one.x))).toEqual(new Set([0]))
+})
