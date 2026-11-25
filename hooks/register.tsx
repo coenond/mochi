@@ -17,6 +17,7 @@ import type { CoatPick, IdlePose, TerminalDrawsImages } from '../types'
 import { storedPet, type Pet } from '../src/core/adoption'
 import { toBase64 } from '../src/core/base64'
 import { petCommand } from '../src/core/command'
+import { emoteAt, noticeSpell, NO_EMOTE, type EmoteState } from '../src/core/emote'
 import {
   CALM,
   careSpell,
@@ -149,6 +150,7 @@ const STILL: IdlePose = {
 const idlePose = atom({ plugin: 'mochi', key: 'idlePose' } as const, STILL, {
   shape: 'idle-pose-2',
 })
+const emote = atom({ plugin: 'mochi', key: 'emote' } as const, null as string | null)
 
 /** Whether this session's image probe runs, and the picture last drawn, which it blits. */
 type Probe = { isRunning: boolean; shown: Picture | undefined }
@@ -177,6 +179,9 @@ type Life = {
   ran: Set<string>
   random: Random | null
   shown: IdlePose | null
+  /** The emote noticed for the spells so far, and the text last written. */
+  emote: EmoteState
+  shownEmote: string | null
 }
 
 export const register: Register = on => {
@@ -195,6 +200,8 @@ export const register: Register = on => {
     ran: new Set(),
     random: null,
     shown: null,
+    emote: NO_EMOTE,
+    shownEmote: null,
   }
 
   on('session.start', async ($, e, next) => {
@@ -347,6 +354,21 @@ export const register: Register = on => {
         CONTROLS_COLUMNS
       const pup = await drawPicture($, e, probe, idlePicture(adopted, pose))
       const bowl = pose.hasEmptyBowl ? await drawPicture($, e, probe, BOWL_PICTURE) : null
+      // The emote stands beside the pet, on its left when the band has no room right.
+      const said = await read($, emote)
+      const x = Math.max(0, Math.min(pose.x, life.room))
+      const saidColumns = said === null ? 0 : said.length + 1
+      const isSaidLeft = said !== null && x + saidColumns > life.room
+      const saying =
+        said === null ? null : (
+          <Box
+            key="pet:emote"
+            marginLeft={isSaidLeft ? 0 : 1}
+            marginRight={isSaidLeft ? 1 : 0}
+          >
+            <Text dimColor>{said}</Text>
+          </Box>
+        )
       // The bowl sits in front of the pup's nose. The pet's spot takes the band's width,
       // so the care controls stay put at its right edge while the pet walks about.
       return (
@@ -356,11 +378,13 @@ export const register: Register = on => {
             flexDirection="row"
             alignItems="center"
             flexGrow={1}
-            marginLeft={Math.max(0, Math.min(pose.x, life.room))}
+            marginLeft={isSaidLeft ? Math.max(0, x - saidColumns) : x}
           >
+            {isSaidLeft && saying}
             {pose.facing === 'left' && bowl}
             {pup}
             {pose.facing === 'right' && bowl}
+            {!isSaidLeft && saying}
           </Box>
           <Box key="care" flexDirection="column" alignItems="flex-end">
             {CONTROLS.map(({ verb, glyph, hotkey }) => (
@@ -719,7 +743,15 @@ async function tick($: EngineInterface, life: Life, run: number) {
       await update($, idlePose, () => pose)
       life.shown = pose
     }
-    $.clock.after(Math.max(1, nextAt - now), () => tick($, life, run))
+    life.emote = noticeSpell(life.emote, life.spell, now)
+    const said = emoteAt(life.emote, now)
+    if (said !== life.shownEmote) {
+      await update($, emote, () => said)
+      life.shownEmote = said
+    }
+    // A showing emote wakes the loop when it fades, even while the pet holds still.
+    const wakeAt = said === null ? nextAt : Math.min(nextAt, life.emote.fadesAt)
+    $.clock.after(Math.max(1, wakeAt - now), () => tick($, life, run))
   } catch {
     if (run === life.run) life.run = 0
   }

@@ -64,6 +64,8 @@ declare module 'claude-code' {
       pet: Shaped<Pet | null>
       coatPick: Shaped<CoatPick>
       idlePose: Shaped<IdlePose>
+      /** The emote beside the pet, or `null` when it says nothing. */
+      emote: string | null
     }
   }
 }

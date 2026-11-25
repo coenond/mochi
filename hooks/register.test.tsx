@@ -1004,3 +1004,30 @@ test('petting cuts a wag short (ADR-0005)', async ($, on) => {
   expect(allSvgsOf('beingPetted')).toContain(await petSource(ui))
   await ui.unmount()
 })
+
+test('a happy draft shows a dim *woof woof* beside the pet', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'thank', 's')
+  await clock.advance(1)
+
+  const said = await ui.find({ type: 'Text', text: '*woof woof*' })
+  expect(said?.props.dimColor).toBe(true)
+  await ui.unmount()
+})
+
+test('the emote fades after a few seconds', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'thank', 's')
+  await clock.advance(5000)
+
+  expect(await ui.find({ key: 'pet:emote' })).toBeUndefined()
+  await ui.unmount()
+})
