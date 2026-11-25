@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest'
 import {
   CALM,
   careSpell,
+  curiousSpell,
   IDLE_BEHAVIOURS,
   MIN_WALK_COLUMNS,
   nextSpell,
   poseAt,
   seededRandom,
   spellEndsAt,
+  WANDER_AFTER_MS,
+  wanderOff,
   type Mood,
   type Random,
   type Spell,
@@ -282,5 +285,101 @@ describe('care comes first (ADR-0005)', () => {
     expect(spell).toMatchObject({ fromX: 7, toX: 7, facing: 'left', holdMs: 0 })
     expect(spell.playMs).toBeGreaterThanOrEqual(1500)
     expect(spell.playMs).toBeLessThanOrEqual(3000)
+  })
+})
+
+describe('curiousSpell', () => {
+  const SIT: Spell = { ...WALK, behaviour: 'sit', toX: 10, playMs: 3600, holdMs: 20_000 }
+
+  it('trots over to where the owner types, then sits watching', () => {
+    const spell = curiousSpell(SIT, 1000, 30, false)
+
+    expect(spell).toMatchObject({
+      behaviour: 'curious',
+      fromX: 10,
+      toX: 30,
+      facing: 'right',
+    })
+    expect(poseAt(spell, 1000)).toMatchObject({
+      behaviour: 'walk',
+      x: 10,
+      isMoving: true,
+    })
+    expect(poseAt(spell, 1000 + 5 * 160)).toMatchObject({ behaviour: 'walk', x: 15 })
+    expect(poseAt(spell, 1000 + 20 * 160)).toMatchObject({
+      behaviour: 'curious',
+      frame: 0,
+      x: 30,
+      isMoving: false,
+    })
+  })
+
+  it('sits watching where it is when it is already there', () => {
+    const spell = curiousSpell(SIT, 1000, 10, false)
+
+    expect(poseAt(spell, 1000)).toMatchObject({ behaviour: 'curious', frame: 0, x: 10 })
+  })
+
+  it('holds still while watching: no redraw until it wanders off', () => {
+    const spell = curiousSpell(SIT, 1000, 10, false)
+
+    expect(poseAt(spell, 2000).nextAt).toBe(spellEndsAt(spell))
+  })
+
+  it('wanders off a while after the last key', () => {
+    const spell = curiousSpell(SIT, 1000, 10, false)
+
+    expect(spellEndsAt(spell)).toBe(1000 + WANDER_AFTER_MS)
+  })
+
+  it('keeps watching from the same spot while the owner keeps typing', () => {
+    const first = curiousSpell(SIT, 1000, 30, false)
+    const later = curiousSpell(first, 9000, 50, false)
+
+    expect(later).toMatchObject({ startedAt: 1000, fromX: 10, toX: 30 })
+    expect(spellEndsAt(later)).toBe(9000 + WANDER_AFTER_MS)
+  })
+
+  it('tilts its head, ears up, at a question mark, then watches again', () => {
+    const watching = curiousSpell(SIT, 1000, 10, false)
+    const asked = curiousSpell(watching, 5000, 10, true)
+
+    expect(poseAt(asked, 5000)).toMatchObject({
+      behaviour: 'curious',
+      frame: 1,
+      isMoving: true,
+    })
+    expect(poseAt(asked, 5000 + 500)).toMatchObject({ frame: 2 })
+    expect(poseAt(asked, 5000 + 1500)).toMatchObject({ frame: 0, isMoving: false })
+  })
+
+  it('does not cut care short (ADR-0005)', () => {
+    const eating = careSpell('eating', SIT, 1000)
+
+    expect(curiousSpell(eating, 1500, 30, false)).toBe(eating)
+  })
+
+  it('is cut short by care', () => {
+    const watching = curiousSpell(SIT, 1000, 10, false)
+
+    expect(careSpell('beingPetted', watching, 2000).behaviour).toBe('beingPetted')
+  })
+
+  it('outranks idle life: idle never follows while the owner types', () => {
+    const watching = curiousSpell(SIT, 1000, 10, false)
+
+    expect(poseAt(watching, 1000 + WANDER_AFTER_MS - 1).behaviour).toBe('curious')
+  })
+})
+
+describe('wanderOff', () => {
+  it('ends watching now, when the owner sends or clears the prompt', () => {
+    const watching = curiousSpell({ ...WALK, toX: 10 }, 1000, 10, false)
+
+    expect(spellEndsAt(wanderOff(watching, 4000))).toBe(4000)
+  })
+
+  it('leaves anything else alone', () => {
+    expect(wanderOff(WALK, 1200)).toBe(WALK)
   })
 })

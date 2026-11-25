@@ -1,7 +1,8 @@
 // Idle life: which idle behaviour the pet chooses on its own, where it walks in the band,
 // and which frame shows when. Pure: time, the band's room, the pet's mood and a random
-// source come in. Care (eating, being petted) plays as a spell of its own, cutting short
-// whatever the pet was doing: it takes top priority (ADR-0005).
+// source come in. Reactions play as spells of their own, cutting short what ranks below
+// them (ADR-0005): care (eating, being petted) above all, then curiosity while the owner
+// types, then idle life.
 //
 // The pet lives one spell after another. A spell plays its behaviour's frames, then
 // holds one still pose with no redraw at all. Holding lasts about four times as long as
@@ -25,7 +26,7 @@ export const CARE = ['eating', 'beingPetted'] as const
 
 export type Care = (typeof CARE)[number]
 
-export const BEHAVIOURS = [...IDLE_BEHAVIOURS, ...CARE] as const
+export const BEHAVIOURS = [...IDLE_BEHAVIOURS, ...CARE, 'curious'] as const
 
 /** The idle behaviours, and the reactions built so far. */
 export type Behaviour = (typeof BEHAVIOURS)[number]
@@ -52,6 +53,8 @@ export type Spell = {
   holdMs: number
   /** A hungry pet walks slower and sits by its empty bowl. */
   isHungry: boolean
+  /** Curiosity only: when a `?` made it tilt its head, ears up. */
+  perkedAt?: number | null
 }
 
 /** What the band draws at one moment, and when it next needs drawing. */
@@ -70,6 +73,8 @@ export const MIN_WALK_COLUMNS = 4
 
 /** About 6 frames a second at most (spec: 6 to 9 while moving). */
 const MIN_FRAME_MS = 160
+/** How long the pet keeps watching the prompt after the owner's last key. */
+export const WANDER_AFTER_MS = 10_000
 /** A hungry pet walks at about 4 frames a second. */
 const HUNGRY_WALK_FRAME_MS = 240
 const STILL_PER_MOVING = 4
@@ -86,6 +91,7 @@ const PLAY: Readonly<Record<Behaviour, { frameMs: number; passes: number }>> = {
   scratch: { frameMs: MIN_FRAME_MS, passes: 5 },
   eating: { frameMs: 220, passes: 2 },
   beingPetted: { frameMs: 220, passes: 2 },
+  curious: { frameMs: 500, passes: 1 },
 }
 
 /** The behaviour whose first frame is held after playing. */
@@ -98,6 +104,7 @@ const HOLD_AS: Readonly<Record<Behaviour, Behaviour>> = {
   scratch: 'sit',
   eating: 'sit',
   beingPetted: 'sit',
+  curious: 'curious',
 }
 
 /** How often each is chosen, against the others. */
@@ -174,6 +181,53 @@ export function careSpell(behaviour: Care, previous: Spell | null, now: number):
   }
 }
 
+/**
+ * The owner typed, `toX` the column under their caret. The pet trots over and sits
+ * watching the prompt until a while after the last key, tilting its head at a `?`. Care
+ * playing is left to finish (ADR-0005); while the pet already watches, it stays put.
+ */
+export function curiousSpell(
+  previous: Spell | null,
+  now: number,
+  toX: number,
+  isQuestion: boolean,
+): Spell {
+  if (previous !== null && isCaring(previous, now)) return previous
+  if (previous?.behaviour === 'curious') {
+    return {
+      ...previous,
+      playMs: now - previous.startedAt + WANDER_AFTER_MS,
+      perkedAt: isQuestion ? now : previous.perkedAt,
+    }
+  }
+
+  const pose = previous === null ? null : poseAt(previous, now)
+  const fromX = pose?.x ?? 0
+  const facing =
+    toX === fromX ? (pose?.facing ?? 'right') : toX > fromX ? 'right' : 'left'
+  return {
+    behaviour: 'curious',
+    startedAt: now,
+    fromX,
+    toX,
+    facing,
+    playMs: WANDER_AFTER_MS,
+    holdMs: 0,
+    isHungry: false,
+    perkedAt: isQuestion ? now : null,
+  }
+}
+
+/** The owner sent or cleared the prompt: a watching pet wanders off now. */
+export function wanderOff(spell: Spell, now: number): Spell {
+  if (spell.behaviour !== 'curious') return spell
+  return { ...spell, playMs: Math.max(0, now - spell.startedAt), holdMs: 0 }
+}
+
+function isCaring(spell: Spell, now: number): boolean {
+  return (CARE as readonly string[]).includes(spell.behaviour) && now < spellEndsAt(spell)
+}
+
 export function spellEndsAt(spell: Spell): number {
   return spell.startedAt + spell.playMs + spell.holdMs
 }
@@ -181,6 +235,7 @@ export function spellEndsAt(spell: Spell): number {
 export function poseAt(spell: Spell, now: number): Pose {
   const elapsed = Math.max(0, now - spell.startedAt)
   const { behaviour, facing, isHungry } = spell
+  if (behaviour === 'curious') return curiousPose(spell, now)
 
   if (elapsed >= spell.playMs && behaviour !== 'walk') {
     const held = HOLD_AS[behaviour]
@@ -209,6 +264,42 @@ export function poseAt(spell: Spell, now: number): Pose {
     isMoving: elapsed < spell.playMs,
     nextAt: Math.min(spell.startedAt + (step + 1) * frameMs, spellEndsAt(spell)),
   }
+}
+
+/** Trotting over at walking pace, then watching: still, but for a head tilt at a `?`. */
+function curiousPose(spell: Spell, now: number): Pose {
+  const elapsed = Math.max(0, now - spell.startedAt)
+  const columns = Math.abs(spell.toX - spell.fromX)
+  const end = spellEndsAt(spell)
+  const still = { x: spell.toX, facing: spell.facing, hasEmptyBowl: false }
+
+  if (elapsed < columns * MIN_FRAME_MS) {
+    const step = Math.floor(elapsed / MIN_FRAME_MS)
+    return {
+      ...still,
+      behaviour: 'walk',
+      frame: step % PET_FRAMES.walk.length,
+      x: spell.fromX + (spell.toX > spell.fromX ? step : -step),
+      isMoving: true,
+      nextAt: Math.min(spell.startedAt + (step + 1) * MIN_FRAME_MS, end),
+    }
+  }
+
+  const { frameMs } = PLAY.curious
+  const tilt = PET_FRAMES.curious.length - 1
+  const since = spell.perkedAt == null ? Infinity : now - spell.perkedAt
+  if (since >= 0 && since < tilt * frameMs) {
+    const step = Math.floor(since / frameMs)
+    return {
+      ...still,
+      behaviour: 'curious',
+      frame: 1 + step,
+      isMoving: true,
+      nextAt: Math.min(spell.perkedAt! + (step + 1) * frameMs, end),
+    }
+  }
+
+  return { ...still, behaviour: 'curious', frame: 0, isMoving: false, nextAt: end }
 }
 
 /** A small seeded source (mulberry32), so a test can replay the same idle life. */

@@ -1,6 +1,15 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { On, UiFocusInput } from 'claude-code'
+import type {
+  On,
+  PromptChangeInput,
+  PromptEditInput,
+  PromptEditResult,
+  UiFocusInput,
+} from 'claude-code'
+
+import { PET_FRAMES } from '../src/core/sheet'
+import { mirror, toSvg } from '../src/core/sprites'
 
 const MOCHI = { name: 'Mochi', coat: 'red' }
 
@@ -438,5 +447,125 @@ test('the basket and the coat pick have no care controls', async ($, on) => {
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   expect(await ui.find({ key: 'care:pet' })).toBeUndefined()
+  await ui.unmount()
+})
+
+/** The curious frames as the desktop app draws them, facing either way. */
+function curiousSvgs(frame: number): string[] {
+  const sprite = PET_FRAMES.curious[frame]!
+  return [toSvg(sprite, 'red'), toSvg(mirror(sprite), 'red')]
+}
+
+/** Stands in for the editor beneath the mod: the edit goes into the box. */
+function editor(on: On) {
+  on('prompt.edit', (_, e) => {
+    const text = e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end)
+    return { text, cursor: e.start + e.inputText.length }
+  })
+  on('prompt.change', (_, e) => ({ text: e.text }))
+}
+
+/**
+ * The prompt events as the engine raises them. The test kit carries them, but its types
+ * list only the calls a plugin can make, so they are typed here once.
+ */
+function promptEvents($: Engine) {
+  return $.prompt as unknown as {
+    edit: (e: PromptEditInput) => Promise<PromptEditResult>
+    change: (e: PromptChangeInput) => Promise<unknown>
+  }
+}
+
+/** The owner typing `typed` at the end of `draft`. */
+function type($: Engine, draft: string, typed: string) {
+  return promptEvents($).edit({
+    origin: { kind: 'composer' },
+    text: draft,
+    cursor: draft.length,
+    start: draft.length,
+    end: draft.length,
+    inputText: typed,
+  })
+}
+
+async function petSource(ui: { find: (q: { type: string }) => Promise<unknown> }) {
+  const pet = (await ui.find({ type: 'Svg' })) as
+    { props: { source: string } } | undefined
+  return pet?.props.source
+}
+
+test('when the owner types, the pet trots over and sits watching', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'hello the', 're')
+  await clock.advance(10 * 160)
+
+  expect(curiousSvgs(0)).toContain(await petSource(ui))
+  // The caret is at column 2 + 11; the 8-column pup sits centred over it.
+  expect((await ui.find({ type: 'Box' }))?.props.marginLeft).toBe(9)
+  await ui.unmount()
+})
+
+test('its ears perk at a question mark', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await type($, '', 'x')
+  await clock.advance(5000)
+
+  await type($, 'why', '?')
+
+  expect(curiousSvgs(1)).toContain(await petSource(ui))
+  await clock.advance(2000)
+  expect(curiousSvgs(0)).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a while after the last key it wanders off again', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await type($, '', 'x')
+  await clock.advance(9000)
+  expect(curiousSvgs(0)).toContain(await petSource(ui))
+
+  await clock.advance(2000)
+
+  const watching = [0, 1, 2, 3].flatMap(curiousSvgs)
+  expect(watching).not.toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('sending or clearing the prompt sends it off at once', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await type($, '', 'x')
+  await clock.advance(3000)
+
+  await promptEvents($).change({ text: '', cursor: 0, origin: { kind: 'clear' } })
+  await clock.advance(1)
+
+  expect([0, 1, 2, 3].flatMap(curiousSvgs)).not.toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('typing does not cut petting short', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await runPet($, 'pet')
+  const petted = await petSource(ui)
+
+  await type($, '', 'x')
+
+  expect(await petSource(ui)).toBe(petted)
   await ui.unmount()
 })

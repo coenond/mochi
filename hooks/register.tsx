@@ -1,6 +1,7 @@
 // The engine shell (ADR-0005): turns the core's sprites into what each surface draws in
-// the band, the owner's `/pet` commands and coat pick into a kept pet and needs, and the
-// clock into the pet's idle life. No pet logic lives here.
+// the band, the owner's `/pet` commands and coat pick into a kept pet and needs, the
+// owner's typing into curiosity, and the clock into the pet's life. No pet logic lives
+// here.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, UiBlitResult } from 'claude-code'
@@ -12,6 +13,7 @@ import { petCommand } from '../src/core/command'
 import {
   CALM,
   careSpell,
+  curiousSpell,
   nextSpell,
   poseAt,
   seededRandom,
@@ -19,6 +21,7 @@ import {
   type Mood,
   type Random,
   type Spell,
+  wanderOff,
 } from '../src/core/idle'
 import {
   freshNeeds,
@@ -64,6 +67,8 @@ const FALLBACK_PET_COLUMNS = 24
 const FALLBACK_BOWL_COLUMNS = 6
 /** The care controls after the pet: two dim glyphs with their hotkeys (ADR-0008). */
 const CONTROLS_COLUMNS = 10
+/** The prompt's text starts after its `> ` mark. */
+const PROMPT_INDENT = 2
 const CONTROLS = [
   { verb: 'pet', glyph: '♥', hotkey: 'p' },
   { verb: 'feed', glyph: '∴', hotkey: 'f' },
@@ -126,6 +131,9 @@ type Life = {
   run: number
   spell: Spell | null
   room: number
+  /** The band's width and the pet's, as last drawn: where the owner's caret is. */
+  bandColumns: number
+  petColumns: number
   mood: Mood
   random: Random | null
   shown: IdlePose | null
@@ -137,6 +145,8 @@ export const register: Register = on => {
     run: 0,
     spell: null,
     room: 0,
+    bandColumns: 80,
+    petColumns: PET_COLUMNS,
     mood: CALM,
     random: null,
     shown: null,
@@ -163,6 +173,26 @@ export const register: Register = on => {
   })
 
   // The pup shows the coat the focus is on, so the owner sees each shade before picking.
+  // The owner typing: the pet comes to watch. Observe only, and never hold up a key.
+  on('prompt.edit', async ($, e, next) => {
+    const box = await next(e)
+    if (life.run > 0 && box.text !== e.text) {
+      void watchOwner($, life, box.text, box.cursor, e.inputText.includes('?'))
+    }
+
+    return box
+  })
+
+  // The owner sent or cleared the prompt: nothing left to watch.
+  on('prompt.change', async ($, e, next) => {
+    if (life.run > 0 && e.text === '' && life.spell !== null) {
+      life.spell = wanderOff(life.spell, await $.clock.now())
+      restart($, life)
+    }
+
+    return next(e)
+  })
+
   on('ui.focus', { component: 'AbovePrompt' }, async ($, e, next) => {
     const moved = await next(e)
     const coat = COATS.find(one => e.element === COAT_KEY_PREFIX + one)
@@ -185,6 +215,8 @@ export const register: Register = on => {
       const isFallback =
         e.surface === 'terminal' && (await read($, terminalDrawsImages)) === false
       const bowlColumns = isFallback ? FALLBACK_BOWL_COLUMNS : BOWL_COLUMNS
+      life.bandColumns = e.props.bodyColumns
+      life.petColumns = isFallback ? FALLBACK_PET_COLUMNS : PET_COLUMNS
       life.room =
         e.props.bodyColumns -
         (isFallback ? FALLBACK_PET_COLUMNS : PET_COLUMNS) -
@@ -404,6 +436,21 @@ async function runCommand($: EngineInterface, life: Life, args: string): Promise
   }
 
   return outcome.reply
+}
+
+/** The pet comes to sit over the owner's caret and watch them type (ADR-0005). */
+async function watchOwner(
+  $: EngineInterface,
+  life: Life,
+  text: string,
+  cursor: number,
+  isQuestion: boolean,
+) {
+  const line = text.slice(0, cursor).split('\n').at(-1) ?? ''
+  const caret = (PROMPT_INDENT + line.length) % Math.max(1, life.bandColumns)
+  const toX = Math.max(0, Math.min(caret - life.petColumns / 2, life.room))
+  life.spell = curiousSpell(life.spell, await $.clock.now(), Math.round(toX), isQuestion)
+  restart($, life)
 }
 
 /** Keeps the pet in the store for every session, and in this one's band. */
