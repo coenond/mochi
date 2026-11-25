@@ -153,6 +153,7 @@ test('a plain terminal gets the half-block basket', async ($, on) => {
 })
 
 test('/pet adopt with a coat adopts and keeps the pet in the store', async ($, on) => {
+  mock.clock(on)
   const store = await startSession($, on)
 
   const { text } = await runPet($, 'adopt Mochi light')
@@ -197,6 +198,7 @@ test('/pet adopt without a coat lets the owner pick one in the band', async ($, 
 })
 
 test('the coat with focus shows on the pup before it is picked', async ($, on) => {
+  mock.clock(on)
   on('ui.focus', () => ({}))
   await startSession($, on)
   await runPet($, 'adopt Mochi')
@@ -217,6 +219,7 @@ test('the coat with focus shows on the pup before it is picked', async ($, on) =
 })
 
 test('/pet name renames the pet everywhere', async ($, on) => {
+  mock.clock(on)
   const store = await startSession($, on, { pet: MOCHI })
 
   const { text } = await runPet($, 'name Biscuit')
@@ -226,6 +229,7 @@ test('/pet name renames the pet everywhere', async ($, on) => {
 })
 
 test('/pet adopt sees a pet another session adopted since this one started', async ($, on) => {
+  mock.clock(on)
   const store = await startSession($, on)
   store.set('pet', MOCHI)
 
@@ -286,4 +290,93 @@ test('in a band narrower than the pet it stays at the left edge', async ($, on) 
   const seen = await watchBand($, on, 3 * 60_000, 6)
 
   expect(new Set(seen.map(one => one.x))).toEqual(new Set([0]))
+})
+
+const HOUR = 3_600_000
+
+/** Needs as the store keeps them, true at `at`. */
+function needs(
+  at: number,
+  levels: Partial<Record<'hunger' | 'happiness' | 'energy', number>>,
+) {
+  return { hunger: 100, happiness: 100, energy: 100, ...levels, at }
+}
+
+test('adopting gives the pet full needs, kept in the store', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on)
+  const now = clock.now()
+
+  await runPet($, 'adopt Mochi red')
+
+  expect(store.get('needs')).toEqual(needs(now, {}))
+})
+
+test('/pet feed gives a hungry pet kibble, and it eats', async ($, on) => {
+  const clock = mock.clock(on)
+  const now = clock.now()
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(now, { hunger: 20 }),
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  const { text } = await runPet($, 'feed')
+
+  expect(text).toBe('Mochi crunches through the kibble.')
+  expect(store.get('needs')).toMatchObject({ hunger: 50 })
+  // The eating frames bring their own red bowl heaped with kibble.
+  expect((await ui.find({ type: 'Svg' }))?.props.source).toContain('#d4553f')
+  await ui.unmount()
+})
+
+test('a full pet refuses kibble', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+
+  const { text } = await runPet($, 'feed')
+
+  expect(text).toBe('Mochi is full.')
+  expect(store.get('needs')).toMatchObject({ hunger: 100 })
+})
+
+test('/pet status shows name, coat, needs and treats saved', async ($, on) => {
+  const clock = mock.clock(on)
+  await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { hunger: 40, happiness: 80, energy: 60 }),
+  })
+
+  const { text } = await runPet($, 'status')
+
+  expect(text).toBe(
+    'Mochi, red coat. Hunger 40, happiness 80, energy 60. Treats saved: 0.',
+  )
+})
+
+test('needs drift while Claude Code was closed, the pet asleep meanwhile', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now() - 8 * HOUR, { energy: 10 }),
+  })
+  await clock.advance(1)
+
+  expect(store.get('needs')).toMatchObject({ hunger: 0, energy: 100 })
+})
+
+test('a hungry pet sits by its empty bowl now and then', async ($, on) => {
+  const clock = mock.clock(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), { hunger: 5 }) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  let sawBowl = false
+  for (let t = 0; t < 10 * 60_000 && !sawBowl; t += 1000) {
+    const pictures = await ui.findAll({ type: 'Svg' })
+    sawBowl = pictures.some(one => one.props.alt === 'An empty bowl')
+    await clock.advance(1000)
+  }
+
+  expect(sawBowl).toBe(true)
+  await ui.unmount()
 })

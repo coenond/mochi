@@ -61,6 +61,9 @@ _Avoid_: stat, meter, health
 **Kibble**: everyday food, free and unlimited. The pet refuses it when full.
 _Avoid_: food, meal
 
+**Bowl**: where the pet eats its kibble. A hungry pet sits by its empty bowl.
+_Avoid_: dish, plate
+
 **Treat**: a special snack the owner earns with wins and gives by choice. Makes the pet very happy and do a trick.
 _Avoid_: reward, coin, point
 

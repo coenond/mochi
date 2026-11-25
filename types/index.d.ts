@@ -1,20 +1,25 @@
 // The state contract. The engine wants it self-contained, so `Coat`, `Pet` and
-// `IdleBehaviour` mirror the core's (src/core/sprites.ts, adoption.ts, idle.ts); the
-// shell's type-check catches drift.
+// `Behaviour` mirror the core's (src/core/sprites.ts, adoption.ts, idle.ts); the shell's
+// type-check catches drift.
 
 export type Coat = 'golden' | 'light' | 'red'
 
 export type Pet = { name: string; coat: Coat }
 
-export type IdleBehaviour = 'walk' | 'sit' | 'lieDown' | 'sleep' | 'yawn' | 'scratch'
+export type Behaviour =
+  'walk' | 'sit' | 'lieDown' | 'sleep' | 'yawn' | 'scratch' | 'eating'
 
-/** What the band draws of the pet's idle life: a frame of a behaviour, where and facing. */
+/**
+ * What the band draws of the pet's life: a frame of a behaviour, where, facing which way,
+ * and whether the empty bowl stands beside it.
+ */
 export type IdlePose = {
-  behaviour: IdleBehaviour
+  behaviour: Behaviour
   frame: number
   /** Columns from the band's left edge. */
   x: number
   facing: 'left' | 'right'
+  hasEmptyBowl: boolean
 }
 
 /**

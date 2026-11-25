@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  CALM,
+  eatingSpell,
   IDLE_BEHAVIOURS,
   MIN_WALK_COLUMNS,
   nextSpell,
   poseAt,
   seededRandom,
   spellEndsAt,
+  type Mood,
   type Random,
   type Spell,
 } from './idle'
@@ -18,12 +21,12 @@ const always =
     value
 
 /** Lives the pet's idle life for `ms` from 0, a spell after the other. */
-function live(ms: number, room: number, random: Random): Spell[] {
+function live(ms: number, room: number, random: Random, mood: Mood = CALM): Spell[] {
   const spells: Spell[] = []
-  let spell = nextSpell(null, 0, room, random)
+  let spell = nextSpell(null, 0, room, random, mood)
   while (spell.startedAt < ms) {
     spells.push(spell)
-    spell = nextSpell(spell, spellEndsAt(spell), room, random)
+    spell = nextSpell(spell, spellEndsAt(spell), room, random, mood)
   }
   return spells
 }
@@ -36,6 +39,20 @@ const WALK: Spell = {
   facing: 'left',
   playMs: 6 * 160,
   holdMs: 0,
+  isHungry: false,
+}
+
+const HUNGRY: Mood = { isHungry: true, isTired: false }
+const TIRED: Mood = { isHungry: false, isTired: true }
+
+/** How much of the time the pet spends on `behaviour` over a long life. */
+function share(spells: Spell[], behaviour: Spell['behaviour']): number {
+  const time = (s: Spell) => s.playMs + s.holdMs
+  const all = spells.reduce((sum, s) => sum + time(s), 0)
+  return (
+    spells.filter(s => s.behaviour === behaviour).reduce((sum, s) => sum + time(s), 0) /
+    all
+  )
 }
 
 describe('seededRandom', () => {
@@ -150,6 +167,7 @@ describe('poseAt', () => {
       facing: 'right',
       playMs: 3600,
       holdMs: 20_000,
+      isHungry: false,
     }
     const pose = poseAt(sit, 3600 + 5000)
 
@@ -167,5 +185,76 @@ describe('poseAt', () => {
     }
 
     expect(poseAt(spell, 1000 + 2000)).toMatchObject({ behaviour: 'sit', frame: 0 })
+  })
+})
+
+describe('needs shape idle life', () => {
+  it('walks slower when hungry', () => {
+    const calm = nextSpell(null, 0, 60, always(0))
+    const hungry = nextSpell(null, 0, 60, always(0), HUNGRY)
+    const columns = Math.abs(hungry.toX - hungry.fromX)
+
+    expect(hungry.playMs).toBe(columns * 240)
+    expect(poseAt(hungry, 240)).toMatchObject({ frame: 1, nextAt: 480 })
+    expect(calm.playMs).toBe(Math.abs(calm.toX - calm.fromX) * 160)
+  })
+
+  it('sits by the empty bowl when hungry, and more often', () => {
+    const calm = share(live(24 * 3_600_000, 70, seededRandom(4)), 'sit')
+    const spells = live(24 * 3_600_000, 70, seededRandom(4), HUNGRY)
+
+    expect(share(spells, 'sit')).toBeGreaterThan(calm * 1.5)
+    const sit = spells.find(s => s.behaviour === 'sit')!
+    expect(poseAt(sit, sit.startedAt).hasEmptyBowl).toBe(true)
+    expect(poseAt(sit, sit.startedAt + sit.playMs).hasEmptyBowl).toBe(true)
+  })
+
+  it('shows no bowl when the pet is not hungry, or not sitting', () => {
+    const sit = live(3_600_000, 70, seededRandom(4)).find(s => s.behaviour === 'sit')!
+    const walk = nextSpell(null, 0, 60, always(0), HUNGRY)
+
+    expect(poseAt(sit, sit.startedAt).hasEmptyBowl).toBe(false)
+    expect(poseAt(walk, 0).hasEmptyBowl).toBe(false)
+  })
+
+  it('sleeps more when tired', () => {
+    const calm = share(live(24 * 3_600_000, 70, seededRandom(5)), 'sleep')
+    const tired = share(live(24 * 3_600_000, 70, seededRandom(5), TIRED), 'sleep')
+
+    expect(tired).toBeGreaterThan(calm * 2)
+  })
+})
+
+describe('eatingSpell', () => {
+  it('eats where the pet is, facing the same way, then goes back to idle life', () => {
+    const spell = eatingSpell(WALK, 1500)
+
+    expect(spell).toMatchObject({
+      behaviour: 'eating',
+      startedAt: 1500,
+      fromX: 7,
+      toX: 7,
+      facing: 'left',
+      holdMs: 0,
+    })
+    expect(poseAt(spell, 1500)).toMatchObject({
+      behaviour: 'eating',
+      frame: 0,
+      isMoving: true,
+    })
+  })
+
+  it('plays the eating frames twice, a few seconds in all', () => {
+    const spell = eatingSpell(null, 0)
+
+    expect(spell.playMs).toBeGreaterThanOrEqual(2000)
+    expect(spell.playMs).toBeLessThanOrEqual(4000)
+  })
+
+  it('is followed by an idle behaviour', () => {
+    const spell = eatingSpell(null, 0)
+    const after = nextSpell(spell, spellEndsAt(spell), 60, always(0.5))
+
+    expect(IDLE_BEHAVIOURS).toContain(after.behaviour)
   })
 })

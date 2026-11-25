@@ -1,11 +1,21 @@
 // Mochi's sprite sheet, as settled in docs/prototypes/sprites/ (copied, never imported).
 // Pixel letters: o outline, c coat, s shade, l highlight, w cream, e eye, h eye shine,
-// n nose, p pink.
+// n nose, p pink, k kibble, K kibble shade, r bowl, R bowl shade, b fallback bowl.
 
-import type { IdleBehaviour } from './idle'
+import type { Behaviour } from './idle'
 import type { Palette, Sprite } from './sprites'
 
-const FIXED = { e: '#1a120c', h: '#ffffff', n: '#1a120c', p: '#f2899f' }
+const FIXED = {
+  e: '#1a120c',
+  h: '#ffffff',
+  n: '#1a120c',
+  p: '#f2899f',
+  k: '#a8692e',
+  K: '#6b3e17',
+  r: '#d4553f',
+  R: '#8e2f22',
+  b: '#6f93db',
+}
 
 /** The real-pixel pet: a golden retriever puppy in side profile, 32 by 24. */
 const PET_PALETTE: Palette = {
@@ -28,8 +38,8 @@ const FALLBACK_PALETTE: Palette = {
 }
 
 // prettier-ignore
-/** Every frame of each idle behaviour, facing right. */
-export const PET_IDLE: Readonly<Record<IdleBehaviour, readonly Sprite[]>> = {
+/** Every frame of each behaviour, facing right. Eating brings its own bowl. */
+export const PET_FRAMES: Readonly<Record<Behaviour, readonly Sprite[]>> = {
   walk: [
     { palette: PET_PALETTE, pixels: [
       '................................',
@@ -718,6 +728,164 @@ export const PET_IDLE: Readonly<Record<IdleBehaviour, readonly Sprite[]>> = {
       '.........oooooooo...............',
     ] },
   ],
+  eating: [
+    { palette: PET_PALETTE, pixels: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '.oo.............................',
+      'ollo............................',
+      'olco............................',
+      'oslco...........................',
+      '.oslcoo.........................',
+      '..osccco........................',
+      '...oscc.oooooooooo...oooooo.....',
+      '......oollllllllllo.ollllllco...',
+      '.....occcccccccccccolllcccccco..',
+      '.....occccccccccccossssccccccco.',
+      '.....occccccccccccosssssccccccco',
+      '.....occccccccccccossssscchecccn',
+      '......occocccccccoosssssscccwwwn',
+      '......occooooooooocossssskKkKwo.',
+      '......occosso....ocosssokKkkKko.',
+      '......occosso....occosorrrrrrrro',
+      '......oooooooo...oooossoRRRRRRo.',
+    ] },
+    { palette: PET_PALETTE, pixels: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '.oo.............................',
+      'ollo............................',
+      'olco............................',
+      'oslco...........................',
+      '.oslcoo.........................',
+      '..osccco.............oooooo.....',
+      '...oscc.oooooooooo..ollllllco...',
+      '......oolllllllllloolllcccccco..',
+      '.....occccccccccccossssccccccco.',
+      '.....occccccccccccosssssccheccco',
+      '.....occccccccccccossssscceecccn',
+      '.....occccccccccccosssssscccwwwn',
+      '......occocccccccocosssssccwwwo.',
+      '......occooooooooocossssskKkKwo.',
+      '......occosso....occossokKkkKko.',
+      '......occosso....occosorrrrrrrro',
+      '......oooooooo...ooososoRRRRRRo.',
+    ] },
+    { palette: PET_PALETTE, pixels: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '.oo.............................',
+      'ollo............................',
+      'olco............................',
+      'oslco...........................',
+      '.oslcoo.........................',
+      '..osccco........................',
+      '...oscc.oooooooooo...oooooo.....',
+      '......oollllllllllo.ollllllco...',
+      '.....occcccccccccccolllcccccco..',
+      '.....occccccccccccossssccccccco.',
+      '.....occccccccccccosssssccccccco',
+      '.....occccccccccccossssscchecccn',
+      '......occocccccccoosssssscccwwwn',
+      '......occooooooooocossssskKkKwo.',
+      '......occosso....ocosssokKkkKko.',
+      '......occosso....occosorrrrrrrro',
+      '......oooooooo...oooossoRRRRRRo.',
+    ] },
+    { palette: PET_PALETTE, pixels: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '.oo.............................',
+      'ollo............................',
+      'olco............................',
+      'oslco...........................',
+      '.oslcoo.........................',
+      '..osccco.............oooooo.....',
+      '...oscc.oooooooooo..ollllllco...',
+      '......oolllllllllloolllcccccco..',
+      '.....occccccccccccossssccccccco.',
+      '.....occccccccccccosssssccheccco',
+      '.....occccccccccccossssscceecccn',
+      '.....occccccccccccosssssscccwwwn',
+      '......occocccccccocosssssccwwwo.',
+      '......occooooooooocosssssccppwo.',
+      '......occosso....occossokKcoKko.',
+      '......occosso....occosorrrrrrrro',
+      '......oooooooo...ooososoRRRRRRo.',
+    ] },
+    { palette: PET_PALETTE, pixels: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '.oo.............................',
+      'ollo............................',
+      'olco............................',
+      'oslco...........................',
+      '.oslcoo.........................',
+      '..osccco........................',
+      '...oscc.oooooooooo...oooooo.....',
+      '......oollllllllllo.ollllllco...',
+      '.....occcccccccccccolllcccccco..',
+      '.....occccccccccccossssccccccco.',
+      '.....occccccccccccosssssccccccco',
+      '.....occccccccccccossssscchecccn',
+      '......occocccccccoosssssscccwwwn',
+      '......occooooooooocosssssccwwwo.',
+      '......occosso....ocosssokKcoKko.',
+      '......occosso....occosorrrrrrrro',
+      '......oooooooo...oooossoRRRRRRo.',
+    ] },
+    { palette: PET_PALETTE, pixels: [
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '.oo.............................',
+      'ollo............................',
+      'olco............................',
+      'oslco...........................',
+      '.oslcoo.........................',
+      '..osccco.............oooooo.....',
+      '...oscc.oooooooooo..ollllllco...',
+      '......oolllllllllloolllcccccco..',
+      '.....occccccccccccossssccccccco.',
+      '.....occccccccccccosssssccheccco',
+      '.....occccccccccccossssscceecccn',
+      '.....occccccccccccosssssscccwwwn',
+      '......occocccccccocosssssccwwwo.',
+      '......occooooooooocosssssccppwo.',
+      '......occosso....occossokKcoKko.',
+      '......occosso....occosorrrrrrrro',
+      '......oooooooo...ooososoRRRRRRo.',
+    ] },
+  ],
 }
 
 // prettier-ignore
@@ -875,20 +1043,21 @@ const FALLBACK_DRAWN: Readonly<Record<'walk' | 'sit' | 'sleep', readonly Sprite[
 }
 
 /** The still pet: the first frame of sitting. */
-export const PET_SIT: Sprite = PET_IDLE.sit[0]!
+export const PET_SIT: Sprite = PET_FRAMES.sit[0]!
 
 /**
- * The half-block fallback draws only walk, sit and sleep (ADR-0007); the other idle
+ * The half-block fallback draws only walk, sit and sleep (ADR-0007); the other
  * behaviours borrow the nearest of them.
  */
-export const FALLBACK_IDLE: Readonly<Record<IdleBehaviour, readonly Sprite[]>> = {
+export const FALLBACK_FRAMES: Readonly<Record<Behaviour, readonly Sprite[]>> = {
   ...FALLBACK_DRAWN,
   lieDown: FALLBACK_DRAWN.sleep,
   yawn: FALLBACK_DRAWN.sit,
   scratch: FALLBACK_DRAWN.sit,
+  eating: FALLBACK_DRAWN.sit,
 }
 
-export const FALLBACK_SIT: Sprite = FALLBACK_IDLE.sit[0]!
+export const FALLBACK_SIT: Sprite = FALLBACK_FRAMES.sit[0]!
 
 /** The basket, empty until adoption: wicker and a cushion, no coat of its own. */
 const BASKET_PALETTE: Palette = {
@@ -951,5 +1120,54 @@ export const FALLBACK_BASKET: Sprite = {
     '...oqqqqqqqqqqqqqqqo....',
     '...oqoqoqoqoqoqoqoqo....',
     '....ooooooooooooooo.....',
+  ],
+}
+
+/** The empty bowl a hungry pet sits by, beside it in the band: 3 columns of the band. */
+// prettier-ignore
+export const EMPTY_BOWL: Sprite = {
+  palette: PET_PALETTE,
+  pixels: [
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '.orrrrrrrro.',
+    '..oRRRRRRo..',
+  ],
+}
+
+// prettier-ignore
+export const FALLBACK_EMPTY_BOWL: Sprite = {
+  palette: FALLBACK_PALETTE,
+  pixels: [
+    '......',
+    '......',
+    '......',
+    '......',
+    '......',
+    '......',
+    '......',
+    '......',
+    'obbbbo',
+    '.obbo.',
   ],
 }

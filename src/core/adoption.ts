@@ -1,32 +1,26 @@
 // Adoption and naming: what `/pet adopt` and `/pet name` do with the owner's words, and
 // reading the one pet back from the cross-session store (ADR-0003).
 
+import { freshNeeds, type Needs } from './needs'
 import { COATS, type Coat } from './sprites'
 
 export type Pet = { name: string; coat: Coat }
 
-/** What a `/pet` command comes to; the shell keeps any pet it names. */
-export type PetCommandOutcome =
+/** What adopting or naming comes to; the shell keeps any pet or needs it names. */
+export type AdoptionOutcome =
   | { kind: 'reply'; reply: string }
-  | { kind: 'adopted'; pet: Pet; reply: string }
+  | { kind: 'adopted'; pet: Pet; needs: Needs; reply: string }
   | { kind: 'renamed'; pet: Pet; reply: string }
   /** Adoption waits on the owner picking a coat in the band. */
   | { kind: 'pickCoat'; name: string; reply: string }
 
 export const MAX_NAME_LENGTH = 16
 
-const USAGE = 'Usage: /pet adopt <name> [coat] · /pet name <name>'
+export const NO_PET_YET = 'No pup yet. /pet adopt <name> to adopt one.'
+
 const ADOPT_USAGE = `Usage: /pet adopt <name> [${COATS.join('|')}]`
 const NAME_USAGE = 'Usage: /pet name <name>'
 const TOO_LONG = `A name can be at most ${MAX_NAME_LENGTH} characters.`
-
-export function petCommand(args: string, pet: Pet | null): PetCommandOutcome {
-  const [verb, ...rest] = words(args)
-
-  if (verb === 'adopt') return adopt(rest, pet)
-  if (verb === 'name') return rename(rest, pet)
-  return reply(USAGE)
-}
 
 /** The pet kept in the store, or `null` when there is none or it cannot be read. */
 export function storedPet(value: unknown): Pet | null {
@@ -37,7 +31,8 @@ export function storedPet(value: unknown): Pet | null {
   return { name, coat }
 }
 
-function adopt(rest: string[], pet: Pet | null): PetCommandOutcome {
+/** `/pet adopt`: `rest` is the owner's words after the verb. */
+export function adopt(rest: string[], pet: Pet | null, now: number): AdoptionOutcome {
   if (pet !== null) {
     return reply(`${pet.name} is already home. Rename with /pet name <name>.`)
   }
@@ -55,11 +50,17 @@ function adopt(rest: string[], pet: Pet | null): PetCommandOutcome {
       reply: `Pick ${name}'s coat in the band (ctrl+x tab to reach it).`,
     }
   }
-  return { kind: 'adopted', pet: { name, coat }, reply: `${name} is home.` }
+  return {
+    kind: 'adopted',
+    pet: { name, coat },
+    needs: freshNeeds(now),
+    reply: `${name} is home.`,
+  }
 }
 
-function rename(rest: string[], pet: Pet | null): PetCommandOutcome {
-  if (pet === null) return reply('No pup yet. /pet adopt <name> to adopt one.')
+/** `/pet name`: `rest` is the owner's words after the verb. */
+export function rename(rest: string[], pet: Pet | null): AdoptionOutcome {
+  if (pet === null) return reply(NO_PET_YET)
 
   const name = rest.join(' ')
   if (name === '') return reply(NAME_USAGE)
@@ -71,18 +72,10 @@ function rename(rest: string[], pet: Pet | null): PetCommandOutcome {
   }
 }
 
-/** The owner's words, control characters dropped, split on any run of spaces. */
-function words(args: string): string[] {
-  return args
-    .replace(/\p{Cc}/gu, '')
-    .split(/\s+/)
-    .filter(word => word !== '')
-}
-
 function isCoat(value: unknown): value is Coat {
   return COATS.includes(value as Coat)
 }
 
-function reply(text: string): PetCommandOutcome {
+function reply(text: string): AdoptionOutcome {
   return { kind: 'reply', reply: text }
 }
