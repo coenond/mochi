@@ -13,7 +13,7 @@ A cozy pixel-art golden retriever puppy that keeps the owner company in the band
 ## Adoption
 
 - Before adoption the band shows the basket and the hint `/pet adopt to adopt a pup`.
-- `/pet adopt <name> [coat]` adopts the pet. Without a coat the owner picks one of the three golden shades.
+- `/pet adopt <name> [coat]` adopts the pet. Without a coat the owner picks one of the three golden shades in the band (hotkeys `g`, `l`, `r`); the pup shows the shade the focus is on.
 - One pet per owner, shared by all projects and sessions (ADR-0003).
 
 ## Behaviours
@@ -46,7 +46,7 @@ A cozy pixel-art golden retriever puppy that keeps the owner company in the band
 - `/pet pet`: petting.
 - `/pet status`: name, coat, needs as numbers, treats saved.
 - `/pet name <name>`: renames the pet.
-- Band hotkeys once the band is focused: `f` feed, `t` treat, `p` pet. Clicking the pet pets it where the surface supports it. Nothing works only by clicking.
+- Beside the pet, two dim glyph controls: `♥` pets and `∴` feeds, with a treat glyph to come. Once the band is focused, hotkeys `p` pet, `f` feed and `t` treat press them, and clicking a glyph presses it. The pet itself cannot be clicked: the engine gives pictures no clicks (ADR-0008). Nothing works only by clicking.
 
 ## Quietness
 

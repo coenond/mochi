@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { toHalfBlocks, toRgba, toSvg, type Sprite } from './sprites'
+import { mirror, toHalfBlocks, toRgba, toSvg, type Sprite } from './sprites'
 
 // A 2 x 2 sprite: outline top-left, coat top-right, empty bottom-left, eye bottom-right.
 const TINY: Sprite = {
@@ -116,5 +116,15 @@ describe('toHalfBlocks', () => {
       { glyph: '▀', fg: GOLDEN_C, bg: null },
       { glyph: ' ', fg: null, bg: null },
     ])
+  })
+})
+
+describe('mirror', () => {
+  it('turns the sprite to face the other way', () => {
+    expect(mirror(TINY)).toEqual({ ...TINY, pixels: ['co', 'e.'] })
+  })
+
+  it('pads short rows so the picture keeps its width', () => {
+    expect(mirror({ ...TINY, pixels: ['oc', 'e'] }).pixels).toEqual(['co', '.e'])
   })
 })
