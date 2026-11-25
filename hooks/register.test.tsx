@@ -5,6 +5,7 @@ import type {
   PromptChangeInput,
   PromptEditInput,
   PromptEditResult,
+  PromptSubmitInput,
   TurnCompleteInput,
   TurnStartInput,
   UiFocusInput,
@@ -264,7 +265,7 @@ async function watchBand($: Engine, on: On, ms: number, bodyColumns = 80) {
   })
   const seen: { x: number; source: string }[] = []
   for (let t = 0; t < ms; t += 160) {
-    const box = await ui.find({ type: 'Box' })
+    const box = await ui.find({ key: 'pet:spot' })
     const pet = await ui.find({ type: 'Svg' })
     seen.push({
       x: Number(box?.props.marginLeft ?? 0),
@@ -468,6 +469,23 @@ test('the band has dim ♥, ∴ and ✦ controls on hotkeys p, f and t (ADR-0008
   }
 })
 
+test('the controls stand in a column at the right edge, wherever the pet is', async ($, on) => {
+  const clock = mock.clock(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const controls = await ui.find({ key: 'care' })
+    const spot = await ui.find({ key: 'pet:spot' })
+
+    expect(controls?.props).toMatchObject({ flexDirection: 'column' })
+    expect(controls?.props.marginLeft).toBeUndefined()
+    // The pet's spot takes the band's width, which pushes the controls to its edge.
+    expect(spot?.props.flexGrow).toBe(1)
+    await ui.unmount()
+  }
+})
+
 test('pressing a control pets, feeds or gives a treat without a word', async ($, on) => {
   const clock = mock.clock(on)
   const appended = mock.session(on)
@@ -520,6 +538,7 @@ function promptEvents($: Engine) {
   return $.prompt as unknown as {
     edit: (e: PromptEditInput) => Promise<PromptEditResult>
     change: (e: PromptChangeInput) => Promise<unknown>
+    submit: (e: PromptSubmitInput) => Promise<unknown>
   }
 }
 
@@ -552,7 +571,7 @@ test('when the owner types, the pet trots over and sits watching', async ($, on)
 
   expect(curiousSvgs(0)).toContain(await petSource(ui))
   // The caret is at column 2 + 11; the 8-column pup sits centred over it.
-  expect((await ui.find({ type: 'Box' }))?.props.marginLeft).toBe(9)
+  expect((await ui.find({ key: 'pet:spot' }))?.props.marginLeft).toBe(9)
   await ui.unmount()
 })
 
@@ -873,5 +892,115 @@ test('a call refused with nobody asked goes by unnoticed', async ($, on) => {
   await clock.advance(1)
 
   expect(allSvgsOf('watching')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+/** Stands in for the engine beneath the mod: a sent prompt goes in as it is. */
+function sends(on: On) {
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+}
+
+/** The owner pressing Enter on `text`, or on a slash command. */
+function send($: Engine, text: string, command?: { name: string; args: string }) {
+  return promptEvents($).submit({
+    text,
+    command,
+    wait: false,
+    origin: { kind: 'composer' },
+  })
+}
+
+test('a happy draft makes it wag', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'thank', 's')
+  await clock.advance(1)
+
+  expect(allSvgsOf('wagging')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('an angry draft makes it shrink back', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'wt', 'f')
+  await clock.advance(1)
+
+  expect(allSvgsOf('shrinkingBack')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a sad draft brings it close to lie down by the caret', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'i give u', 'p')
+  await clock.advance(20 * 160)
+
+  expect(svgsOf('lieDown')).toContain(await petSource(ui))
+  // The caret is at column 2 + 9; the 8-column pup lies centred over it.
+  expect((await ui.find({ key: 'pet:spot' }))?.props.marginLeft).toBe(7)
+  await ui.unmount()
+})
+
+test('a neutral draft only brings it over to watch', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'add a tes', 't')
+  await clock.advance(20 * 160)
+
+  expect(curiousSvgs(0)).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a happy prompt sent makes it wag before it thinks along (ADR-0005)', async ($, on) => {
+  sends(on)
+  const { clock, ui } = await startTurn($, on)
+
+  await send($, 'great, thanks')
+  await turnEvents($).start({ text: 'great, thanks', turnId: 't1' })
+  await clock.advance(1)
+
+  expect(allSvgsOf('wagging')).toContain(await petSource(ui))
+  await clock.advance(6000)
+  expect(allSvgsOf('wagging')).not.toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a slash command sent is not read for tone', async ($, on) => {
+  const clock = mock.clock(on)
+  sends(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const before = await petSource(ui)
+
+  await send($, '/pet name Awesome', { name: 'pet', args: 'name Awesome' })
+  await clock.advance(1)
+
+  expect(await petSource(ui)).toBe(before)
+  await ui.unmount()
+})
+
+test('petting cuts a wag short (ADR-0005)', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await type($, 'thank', 's')
+
+  await runPet($, 'pet')
+
+  expect(allSvgsOf('beingPetted')).toContain(await petSource(ui))
   await ui.unmount()
 })

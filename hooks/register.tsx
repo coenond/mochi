@@ -1,6 +1,6 @@
 // The engine shell (ADR-0005): turns the core's sprites into what each surface draws in
 // the band, the owner's `/pet` commands and coat pick into a kept pet and needs, the
-// owner's typing into curiosity, Claude's turns and tool calls into thinking, how those
+// owner's typing into curiosity, what they write into tone, Claude's turns and tool calls into thinking, how those
 // calls end into trouble, wins and confusion, and the clock into the pet's life. No pet
 // logic lives here.
 
@@ -28,6 +28,7 @@ import {
   seededRandom,
   spellEndsAt,
   thinkingOf,
+  toneSpell,
   treatSpell,
   type Mood,
   type Random,
@@ -65,6 +66,7 @@ import {
   type ToolCallEnd,
   type Trouble,
 } from '../src/core/trouble'
+import { draftTone, toneOf, type Tone } from '../src/core/tone'
 import {
   COATS,
   mirror,
@@ -90,8 +92,12 @@ const BOWL_COLUMNS = 3
 /** The half-block fallback is drawn a pixel to a column. */
 const FALLBACK_PET_COLUMNS = 24
 const FALLBACK_BOWL_COLUMNS = 6
-/** The care controls after the pet: three dim glyphs with their hotkeys (ADR-0008). */
-const CONTROLS_COLUMNS = 15
+/**
+ * The care controls: three dim glyphs with their hotkeys, one above the other at the
+ * band's right edge (ADR-0008, ADR-0009). A terminal draws each as `p: ♥`; one more
+ * column keeps the pet off them.
+ */
+const CONTROLS_COLUMNS = 5
 /** The prompt's text starts after its `> ` mark. */
 const PROMPT_INDENT = 2
 const CONTROLS = [
@@ -164,6 +170,8 @@ type Life = {
   /** What Claude is doing in the main turn, while one runs. */
   work: Work | null
   trouble: Trouble
+  /** The tone the pet last reacted to in the owner's draft. */
+  draftTone: Tone
   /** The main loop's tool calls put to the owner, and those that ran, by id. */
   asked: Set<string>
   ran: Set<string>
@@ -182,6 +190,7 @@ export const register: Register = on => {
     mood: CALM,
     work: null,
     trouble: NO_TROUBLE,
+    draftTone: 'neutral',
     asked: new Set(),
     ran: new Set(),
     random: null,
@@ -209,7 +218,8 @@ export const register: Register = on => {
   })
 
   // The pup shows the coat the focus is on, so the owner sees each shade before picking.
-  // The owner typing: the pet comes to watch. Observe only, and never hold up a key.
+  // The owner typing: the pet comes to watch, and reacts to the draft's tone. Observe
+  // only, and never hold up a key.
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
     if (life.run > 0 && box.text !== e.text) {
@@ -217,6 +227,16 @@ export const register: Register = on => {
     }
 
     return box
+  })
+
+  // The owner sent a prompt of their own: the pet reacts to its tone. Observe only.
+  on('prompt.submit', async ($, e, next) => {
+    const isOwners = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    if (life.run > 0 && isOwners && e.command === undefined && e.isMeta !== true) {
+      void hearOwner($, life, e.text)
+    }
+
+    return next(e)
   })
 
   // Claude works: the pet thinks along with the main turn, never a subagent's, and reacts
@@ -287,6 +307,7 @@ export const register: Register = on => {
 
   // The owner sent or cleared the prompt: nothing left to watch.
   on('prompt.change', async ($, e, next) => {
+    if (e.text === '') life.draftTone = 'neutral'
     if (life.run > 0 && e.text === '' && life.spell !== null) {
       life.spell = wanderOff(life.spell, await $.clock.now())
       restart($, life)
@@ -326,17 +347,22 @@ export const register: Register = on => {
         CONTROLS_COLUMNS
       const pup = await drawPicture($, e, probe, idlePicture(adopted, pose))
       const bowl = pose.hasEmptyBowl ? await drawPicture($, e, probe, BOWL_PICTURE) : null
-      // The bowl sits in front of the pup's nose; the care controls follow the pup.
+      // The bowl sits in front of the pup's nose. The pet's spot takes the band's width,
+      // so the care controls stay put at its right edge while the pet walks about.
       return (
-        <Box
-          flexDirection="row"
-          alignItems="center"
-          marginLeft={Math.max(0, Math.min(pose.x, life.room))}
-        >
-          {pose.facing === 'left' && bowl}
-          {pup}
-          {pose.facing === 'right' && bowl}
-          <Box flexDirection="row" columnGap={1} marginLeft={1}>
+        <Box flexDirection="row" alignItems="center">
+          <Box
+            key="pet:spot"
+            flexDirection="row"
+            alignItems="center"
+            flexGrow={1}
+            marginLeft={Math.max(0, Math.min(pose.x, life.room))}
+          >
+            {pose.facing === 'left' && bowl}
+            {pup}
+            {pose.facing === 'right' && bowl}
+          </Box>
+          <Box key="care" flexDirection="column" alignItems="flex-end">
             {CONTROLS.map(({ verb, glyph, hotkey }) => (
               <Button
                 key={`care:${verb}`}
@@ -606,7 +632,10 @@ async function notice($: EngineInterface, life: Life, call: ToolCallEnd) {
   }
 }
 
-/** The pet comes to sit over the owner's caret and watch them type (ADR-0005). */
+/**
+ * The pet comes to sit over the owner's caret and watch them type, and reacts when the
+ * draft turns happy, angry or sad (ADR-0005).
+ */
 async function watchOwner(
   $: EngineInterface,
   life: Life,
@@ -614,11 +643,36 @@ async function watchOwner(
   cursor: number,
   isQuestion: boolean,
 ) {
+  const now = await $.clock.now()
+  const toX = caretX(life, text, cursor)
+  const draft = draftTone(life.draftTone, text)
+  life.draftTone = draft.tone
+  life.spell = draft.isNew
+    ? toneSpell(draft.tone, life.spell, now, toX, life.room, life.mood)
+    : curiousSpell(life.spell, now, toX, isQuestion)
+  restart($, life)
+}
+
+/** The owner sent `text`: the pet reacts to its tone. Never fails the prompt. */
+async function hearOwner($: EngineInterface, life: Life, text: string) {
+  try {
+    life.draftTone = 'neutral'
+    const tone = toneOf(text)
+    if (tone === 'neutral') return
+    const now = await $.clock.now()
+    const toX = caretX(life, text, text.length)
+    life.spell = toneSpell(tone, life.spell, now, toX, life.room, life.mood)
+    restart($, life)
+  } catch {
+    // The pet missing a beat is fine; the owner's prompt going in is what matters.
+  }
+}
+
+/** The column the pet sits at, centred over the owner's caret, kept in the band. */
+function caretX(life: Life, text: string, cursor: number): number {
   const line = text.slice(0, cursor).split('\n').at(-1) ?? ''
   const caret = (PROMPT_INDENT + line.length) % Math.max(1, life.bandColumns)
-  const toX = Math.max(0, Math.min(caret - life.petColumns / 2, life.room))
-  life.spell = curiousSpell(life.spell, await $.clock.now(), Math.round(toX), isQuestion)
-  restart($, life)
+  return Math.round(Math.max(0, Math.min(caret - life.petColumns / 2, life.room)))
 }
 
 /** Keeps the pet in the store for every session, and in this one's band. */

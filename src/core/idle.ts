@@ -2,8 +2,8 @@
 // and which frame shows when. Pure: time, the band's room, the pet's mood and a random
 // source come in. Reactions play as spells of their own, cutting short what ranks below
 // them (ADR-0005): care (eating, being petted) above all, then reactions to trouble, wins
-// and confusion, then curiosity while the owner types, then thinking while Claude works,
-// then idle life.
+// and confusion, then the owner's tone, then curiosity while the owner types, then
+// thinking while Claude works, then idle life.
 //
 // Now and then idle life plays a trick of its own; a trick after a treat is care.
 //
@@ -12,6 +12,7 @@
 // playing, so the pet moves about a fifth of the time.
 
 import { PET_FRAMES } from './sheet'
+import type { FeltTone } from './tone'
 
 export const IDLE_BEHAVIOURS = [
   'walk',
@@ -47,10 +48,16 @@ export const WORK_REACTIONS = ['worried', 'celebrating', 'confused'] as const
 
 export type WorkReaction = (typeof WORK_REACTIONS)[number]
 
+/** The reactions to the owner's tone: happy wags, angry shrinks back, sad comes close. */
+export const TONE_REACTIONS = ['wagging', 'shrinkingBack', 'comingClose'] as const
+
+export type ToneReaction = (typeof TONE_REACTIONS)[number]
+
 export const BEHAVIOURS = [
   ...IDLE_BEHAVIOURS,
   ...TRICKS,
   ...CARE,
+  ...TONE_REACTIONS,
   'curious',
   ...THINKING,
   ...WORK_REACTIONS,
@@ -81,6 +88,8 @@ export type Spell = {
   holdMs: number
   /** A hungry pet walks slower and sits by its empty bowl. */
   isHungry: boolean
+  /** Tone only: a hungry or tired pet plays its frames slower. */
+  isWeary?: boolean
   /** A trick after a treat, which ranks as care (ADR-0005). */
   isTreat?: boolean
   /** Curiosity only: when a `?` made it tilt its head, ears up. */
@@ -120,6 +129,8 @@ const MORE_WORRY_MS = 2500
 const MAX_WORRY_MS = 3 * REACTION_MS
 /** A hungry pet walks at about 4 frames a second. */
 const HUNGRY_WALK_FRAME_MS = 240
+/** A hungry or tired pet reacts to tone this much slower. */
+const WEARY_SLOWDOWN = 1.5
 const STILL_PER_MOVING = 4
 /** Holds vary from 75% to 125% of their share, so the pet does not tick like a clock. */
 const HOLD_JITTER = 0.5
@@ -138,6 +149,9 @@ const PLAY: Readonly<Record<Behaviour, { frameMs: number; passes: number }>> = {
   hop: { frameMs: MIN_FRAME_MS, passes: 2 },
   eating: { frameMs: 220, passes: 2 },
   beingPetted: { frameMs: 220, passes: 2 },
+  wagging: { frameMs: 220, passes: 4 },
+  shrinkingBack: { frameMs: MIN_FRAME_MS, passes: 1 },
+  comingClose: { frameMs: MIN_FRAME_MS, passes: 1 },
   curious: { frameMs: 500, passes: 1 },
   sniffing: { frameMs: 200, passes: 1 },
   watching: { frameMs: 700, passes: 1 },
@@ -162,6 +176,9 @@ const HOLD_AS: Readonly<Record<Behaviour, Behaviour>> = {
   hop: 'sit',
   eating: 'sit',
   beingPetted: 'sit',
+  wagging: 'sit',
+  shrinkingBack: 'shrinkingBack',
+  comingClose: 'lieDown',
   curious: 'curious',
   sniffing: 'sniffing',
   watching: 'watching',
@@ -307,7 +324,10 @@ export function curiousSpell(
   toX: number,
   isQuestion: boolean,
 ): Spell {
-  if (previous !== null && (isCaring(previous, now) || isReacting(previous, now))) {
+  if (
+    previous !== null &&
+    (isCaring(previous, now) || isReacting(previous, now) || isToning(previous, now))
+  ) {
     return previous
   }
   if (previous?.behaviour === 'curious') {
@@ -333,6 +353,72 @@ export function curiousSpell(
     isHungry: false,
     perkedAt: isQuestion ? now : null,
   }
+}
+
+/**
+ * The owner's tone, `caretX` the column the pet would sit at over their caret and `room`
+ * how far it can move. Happy wags where it is; angry shrinks back a little away from the
+ * caret, still facing it; sad comes over to the caret and lies down beside it. Each lasts
+ * about five seconds, the coming close counted from when it arrives. A hungry or tired
+ * pet wags slower, and a hungry one comes over slower. Care and reactions playing are
+ * left to finish (ADR-0005); the same tone keeps playing.
+ */
+export function toneSpell(
+  tone: FeltTone,
+  previous: Spell | null,
+  now: number,
+  caretX: number,
+  room: number,
+  mood: Mood = CALM,
+): Spell {
+  if (previous !== null && (isCaring(previous, now) || isReacting(previous, now))) {
+    return previous
+  }
+  const behaviour = TONE_OF[tone]
+  if (previous?.behaviour === behaviour && now < spellEndsAt(previous)) return previous
+
+  const maxX = Math.max(0, room)
+  const pose = previous === null ? null : poseAt(previous, now)
+  const x = Math.min(pose?.x ?? 0, maxX)
+  const facing = pose?.facing ?? 'right'
+  const base = { behaviour, startedAt: now, fromX: x, isHungry: false } as const
+
+  if (behaviour === 'wagging') {
+    const isWeary = mood.isHungry || mood.isTired
+    const { passes } = PLAY.wagging
+    const frameMs = frameMsOf(behaviour, false, isWeary)
+    const playMs = Math.min(REACTION_MS, frameMs * PET_FRAMES.wagging.length * passes)
+    return { ...base, toX: x, facing, playMs, holdMs: REACTION_MS - playMs, isWeary }
+  }
+
+  if (behaviour === 'shrinkingBack') {
+    const away = caretX > x ? -1 : 1
+    const toX = Math.max(0, Math.min(maxX, x + away * MIN_WALK_COLUMNS))
+    const playMs = Math.max(1, Math.abs(toX - x)) * PLAY.shrinkingBack.frameMs
+    return {
+      ...base,
+      toX,
+      facing: away < 0 ? 'right' : 'left',
+      playMs,
+      holdMs: REACTION_MS - playMs,
+    }
+  }
+
+  const toX = Math.max(0, Math.min(maxX, Math.round(caretX)))
+  return {
+    ...base,
+    isHungry: mood.isHungry,
+    toX,
+    facing: toX === x ? facing : toX > x ? 'right' : 'left',
+    playMs: Math.abs(toX - x) * frameMsOf('walk', mood.isHungry),
+    holdMs: REACTION_MS,
+  }
+}
+
+const TONE_OF: Readonly<Record<FeltTone, ToneReaction>> = {
+  happy: 'wagging',
+  angry: 'shrinkingBack',
+  sad: 'comingClose',
 }
 
 /** The owner sent or cleared the prompt: a watching pet wanders off now. */
@@ -402,7 +488,17 @@ export function doneWorking(spell: Spell, now: number): Spell {
 
 function outranksWork(spell: Spell, now: number): boolean {
   return (
-    (isCaring(spell, now) || isReacting(spell, now) || spell.behaviour === 'curious') &&
+    (isCaring(spell, now) ||
+      isReacting(spell, now) ||
+      isToning(spell, now) ||
+      spell.behaviour === 'curious') &&
+    now < spellEndsAt(spell)
+  )
+}
+
+function isToning(spell: Spell, now: number): boolean {
+  return (
+    (TONE_REACTIONS as readonly string[]).includes(spell.behaviour) &&
     now < spellEndsAt(spell)
   )
 }
@@ -427,6 +523,7 @@ export function poseAt(spell: Spell, now: number): Pose {
   const elapsed = Math.max(0, now - spell.startedAt)
   const { behaviour, facing, isHungry } = spell
   if (behaviour === 'curious') return curiousPose(spell, now)
+  if (behaviour === 'comingClose') return comingClosePose(spell, now)
 
   if (behaviour === 'waiting' && elapsed >= DOZE_AFTER_MS) {
     return {
@@ -456,7 +553,7 @@ export function poseAt(spell: Spell, now: number): Pose {
     }
   }
 
-  const frameMs = frameMsOf(behaviour, isHungry)
+  const frameMs = frameMsOf(behaviour, isHungry, spell.isWeary)
   const step = Math.floor(elapsed / frameMs)
   const walked = Math.min(step, Math.abs(spell.toX - spell.fromX))
   const x = spell.fromX + (spell.toX >= spell.fromX ? walked : -walked)
@@ -508,6 +605,26 @@ function curiousPose(spell: Spell, now: number): Pose {
   return { ...still, behaviour: 'curious', frame: 0, isMoving: false, nextAt: end }
 }
 
+/** Walking over at walking pace, then lying down beside the caret, still. */
+function comingClosePose(spell: Spell, now: number): Pose {
+  const elapsed = Math.max(0, now - spell.startedAt)
+  const end = spellEndsAt(spell)
+  const still = { x: spell.toX, facing: spell.facing, hasEmptyBowl: false }
+  if (elapsed < spell.playMs) {
+    const frameMs = frameMsOf('walk', spell.isHungry)
+    const step = Math.floor(elapsed / frameMs)
+    return {
+      ...still,
+      behaviour: 'walk',
+      frame: step % PET_FRAMES.walk.length,
+      x: spell.fromX + (spell.toX > spell.fromX ? step : -step),
+      isMoving: true,
+      nextAt: Math.min(spell.startedAt + (step + 1) * frameMs, end),
+    }
+  }
+  return { ...still, behaviour: 'lieDown', frame: 0, isMoving: false, nextAt: end }
+}
+
 /** A small seeded source (mulberry32), so a test can replay the same idle life. */
 export function seededRandom(seed: number): Random {
   let state = seed >>> 0
@@ -520,8 +637,9 @@ export function seededRandom(seed: number): Random {
   }
 }
 
-function frameMsOf(behaviour: Behaviour, isHungry: boolean): number {
-  return behaviour === 'walk' && isHungry ? HUNGRY_WALK_FRAME_MS : PLAY[behaviour].frameMs
+function frameMsOf(behaviour: Behaviour, isHungry: boolean, isWeary = false): number {
+  if (behaviour === 'walk' && isHungry) return HUNGRY_WALK_FRAME_MS
+  return PLAY[behaviour].frameMs * (isWeary ? WEARY_SLOWDOWN : 1)
 }
 
 function choose(random: Random, canWalk: boolean, mood: Mood): IdleBehaviour | Trick {

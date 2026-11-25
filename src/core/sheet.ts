@@ -2,7 +2,7 @@
 // Pixel letters: o outline, c coat, s shade, l highlight, w cream, e eye, h eye shine,
 // n nose, p pink, k kibble, K kibble shade, r bowl, R bowl shade, b fallback bowl.
 
-import type { Behaviour } from './idle'
+import type { Behaviour, ToneReaction } from './idle'
 import type { Palette, Sprite } from './sprites'
 
 const FIXED = {
@@ -38,8 +38,8 @@ const FALLBACK_PALETTE: Palette = {
 }
 
 // prettier-ignore
-/** Every frame of each behaviour, facing right. Eating brings its own bowl. */
-export const PET_FRAMES: Readonly<Record<Behaviour, readonly Sprite[]>> = {
+/** Every frame drawn for each behaviour, facing right. Eating brings its own bowl. */
+const DRAWN: Readonly<Record<Exclude<Behaviour, ToneReaction>, readonly Sprite[]>> = {
   walk: [
     { palette: PET_PALETTE, pixels: [
       '................................',
@@ -2344,6 +2344,18 @@ export const PET_FRAMES: Readonly<Record<Behaviour, readonly Sprite[]>> = {
   ],
 }
 
+/**
+ * Every frame of each behaviour, facing right. The reactions to tone borrow: wagging is
+ * being petted's happy face and swishing tail, shrinking back is worried's lowered head,
+ * and coming close walks over and then lies down.
+ */
+export const PET_FRAMES: Readonly<Record<Behaviour, readonly Sprite[]>> = {
+  ...DRAWN,
+  wagging: DRAWN.beingPetted,
+  shrinkingBack: DRAWN.worried,
+  comingClose: DRAWN.lieDown,
+}
+
 // prettier-ignore
 const FALLBACK_DRAWN: Readonly<
   Record<'walk' | 'sit' | 'sleep' | 'beingPetted' | 'worried', readonly Sprite[]>
@@ -2573,6 +2585,9 @@ export const FALLBACK_FRAMES: Readonly<Record<Behaviour, readonly Sprite[]>> = {
   waiting: FALLBACK_DRAWN.sleep,
   celebrating: FALLBACK_DRAWN.beingPetted,
   confused: FALLBACK_DRAWN.sit,
+  wagging: FALLBACK_DRAWN.beingPetted,
+  shrinkingBack: FALLBACK_DRAWN.worried,
+  comingClose: FALLBACK_DRAWN.sleep,
   spin: FALLBACK_DRAWN.beingPetted,
   rollOver: FALLBACK_DRAWN.sleep,
   playBow: FALLBACK_DRAWN.beingPetted,

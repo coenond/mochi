@@ -16,6 +16,7 @@ import {
   seededRandom,
   spellEndsAt,
   thinkingOf,
+  toneSpell,
   TRICKS,
   treatSpell,
   WANDER_AFTER_MS,
@@ -676,5 +677,129 @@ describe('treatSpell', () => {
 
     expect(curiousSpell(trick, now, 30, false).behaviour).toBe('curious')
     expect(workSpell(trick, now, work, 60, always(0.5)).behaviour).toBe('sniffing')
+  })
+})
+
+describe('toneSpell', () => {
+  const SIT: Spell = { ...WALK, behaviour: 'sit', toX: 10, playMs: 3600, holdMs: 20_000 }
+
+  it('happy: wags where it is for about five seconds', () => {
+    const spell = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(spell).toMatchObject({ behaviour: 'wagging', fromX: 10, toX: 10 })
+    expect(spellEndsAt(spell) - 1000).toBe(REACTION_MS)
+    expect(poseAt(spell, 1000)).toMatchObject({ behaviour: 'wagging', isMoving: true })
+    expect(poseAt(spell, 1000 + spell.playMs)).toMatchObject({ isMoving: false })
+  })
+
+  it('angry: shrinks back away from the caret, still facing it, then holds', () => {
+    const spell = toneSpell('angry', SIT, 1000, 14, 60)
+
+    expect(spell).toMatchObject({
+      behaviour: 'shrinkingBack',
+      fromX: 10,
+      toX: 10 - MIN_WALK_COLUMNS,
+      facing: 'right',
+    })
+    expect(spellEndsAt(spell) - 1000).toBe(REACTION_MS)
+    expect(poseAt(spell, 1000 + spell.playMs)).toMatchObject({
+      behaviour: 'shrinkingBack',
+      frame: 0,
+      x: 10 - MIN_WALK_COLUMNS,
+      isMoving: false,
+    })
+  })
+
+  it('angry: backs the other way when the caret is to its left, and stays in the band', () => {
+    expect(toneSpell('angry', SIT, 1000, 2, 60)).toMatchObject({
+      toX: 10 + MIN_WALK_COLUMNS,
+      facing: 'left',
+    })
+    expect(toneSpell('angry', { ...SIT, fromX: 1, toX: 1 }, 1000, 20, 60)).toMatchObject({
+      toX: 0,
+    })
+  })
+
+  it('sad: comes over to the caret and lies down beside it', () => {
+    const spell = toneSpell('sad', SIT, 1000, 30, 60)
+
+    expect(spell).toMatchObject({
+      behaviour: 'comingClose',
+      fromX: 10,
+      toX: 30,
+      facing: 'right',
+    })
+    expect(poseAt(spell, 1000 + 5 * 160)).toMatchObject({ behaviour: 'walk', x: 15 })
+    expect(poseAt(spell, 1000 + 20 * 160)).toMatchObject({
+      behaviour: 'lieDown',
+      frame: 0,
+      x: 30,
+      isMoving: false,
+      nextAt: spellEndsAt(spell),
+    })
+    expect(spellEndsAt(spell) - (1000 + 20 * 160)).toBe(REACTION_MS)
+  })
+
+  it('sad: comes no further than the band allows', () => {
+    expect(toneSpell('sad', SIT, 1000, 90, 40)).toMatchObject({ toX: 40 })
+  })
+
+  it('keeps going while the same tone plays', () => {
+    const wagging = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(toneSpell('happy', wagging, 3000, 40, 60)).toBe(wagging)
+  })
+
+  it('a new tone cuts the last one short', () => {
+    const wagging = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(toneSpell('sad', wagging, 2000, 30, 60).behaviour).toBe('comingClose')
+  })
+
+  it('gives way to care and to trouble, wins and confusion playing (ADR-0005)', () => {
+    const eating = careSpell('eating', SIT, 1000)
+    const worried = reactionSpell('worried', SIT, 1000, 1)
+
+    expect(toneSpell('happy', eating, 1500, 30, 60)).toBe(eating)
+    expect(toneSpell('angry', worried, 1500, 30, 60)).toBe(worried)
+  })
+
+  it('is cut short by care and by trouble, wins and confusion', () => {
+    const wagging = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(careSpell('beingPetted', wagging, 1500).behaviour).toBe('beingPetted')
+    expect(reactionSpell('worried', wagging, 1500, 1).behaviour).toBe('worried')
+  })
+
+  it('cuts curiosity and thinking short, and neither cuts it short (ADR-0005)', () => {
+    const watching = curiousSpell(SIT, 1000, 10, false)
+    const thinking = workSpell(
+      SIT,
+      1000,
+      { thinking: 'watching', since: 1000 },
+      60,
+      always(0),
+    )
+    const sad = toneSpell('sad', watching, 1500, 30, 60)
+
+    expect(sad.behaviour).toBe('comingClose')
+    expect(toneSpell('happy', thinking, 1500, 30, 60).behaviour).toBe('wagging')
+    expect(curiousSpell(sad, 2000, 30, true)).toBe(sad)
+    expect(
+      workSpell(sad, 2000, { thinking: 'sniffing', since: 2000 }, 60, always(0)),
+    ).toBe(sad)
+  })
+
+  it('needs colour it: a hungry or tired pet wags slower, a hungry one comes over slower', () => {
+    const calm = toneSpell('happy', SIT, 1000, 30, 60)
+    const hungry = toneSpell('happy', SIT, 1000, 30, 60, HUNGRY)
+    const tired = toneSpell('happy', SIT, 1000, 30, 60, TIRED)
+
+    expect(poseAt(calm, 1000).nextAt).toBeLessThan(poseAt(hungry, 1000).nextAt)
+    expect(poseAt(tired, 1000).nextAt).toBe(poseAt(hungry, 1000).nextAt)
+    expect(spellEndsAt(hungry) - 1000).toBe(REACTION_MS)
+
+    const close = toneSpell('sad', SIT, 1000, 30, 60, HUNGRY)
+    expect(poseAt(close, 1000 + 20 * 160)).toMatchObject({ behaviour: 'walk' })
   })
 })
