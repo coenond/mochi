@@ -2,7 +2,7 @@
 // and which frame shows when. Pure: time, the band's room, the pet's mood and a random
 // source come in. Reactions play as spells of their own, cutting short what ranks below
 // them (ADR-0005): care (eating, being petted) above all, then curiosity while the owner
-// types, then idle life.
+// types, then thinking while Claude works, then idle life.
 //
 // The pet lives one spell after another. A spell plays its behaviour's frames, then
 // holds one still pose with no redraw at all. Holding lasts about four times as long as
@@ -26,7 +26,15 @@ export const CARE = ['eating', 'beingPetted'] as const
 
 export type Care = (typeof CARE)[number]
 
-export const BEHAVIOURS = [...IDLE_BEHAVIOURS, ...CARE, 'curious'] as const
+/** Thinking while Claude works, flavoured by the tool in use. */
+export const THINKING = ['sniffing', 'watching', 'carrying', 'waiting'] as const
+
+export type Thinking = (typeof THINKING)[number]
+
+/** What Claude is doing in the turn, and since when. */
+export type Work = { thinking: Thinking; since: number }
+
+export const BEHAVIOURS = [...IDLE_BEHAVIOURS, ...CARE, 'curious', ...THINKING] as const
 
 /** The idle behaviours, and the reactions built so far. */
 export type Behaviour = (typeof BEHAVIOURS)[number]
@@ -75,6 +83,14 @@ export const MIN_WALK_COLUMNS = 4
 const MIN_FRAME_MS = 160
 /** How long the pet keeps watching the prompt after the owner's last key. */
 export const WANDER_AFTER_MS = 10_000
+/** Watching Claude this long becomes a long wait: the pet lies down. */
+export const LONG_WAIT_MS = 30_000
+/** Lying down waiting this long, the pet dozes off. */
+export const DOZE_AFTER_MS = 120_000
+/** How long a patient wait holds before it is looked at again. */
+const WAIT_HOLD_MS = 10 * 60_000
+/** How far the pet sniffs or carries something about, at most. */
+const MAX_WORK_WALK = 16
 /** A hungry pet walks at about 4 frames a second. */
 const HUNGRY_WALK_FRAME_MS = 240
 const STILL_PER_MOVING = 4
@@ -92,6 +108,10 @@ const PLAY: Readonly<Record<Behaviour, { frameMs: number; passes: number }>> = {
   eating: { frameMs: 220, passes: 2 },
   beingPetted: { frameMs: 220, passes: 2 },
   curious: { frameMs: 500, passes: 1 },
+  sniffing: { frameMs: 200, passes: 1 },
+  watching: { frameMs: 700, passes: 1 },
+  carrying: { frameMs: MIN_FRAME_MS, passes: 1 },
+  waiting: { frameMs: 900, passes: 1 },
 }
 
 /** The behaviour whose first frame is held after playing. */
@@ -105,6 +125,10 @@ const HOLD_AS: Readonly<Record<Behaviour, Behaviour>> = {
   eating: 'sit',
   beingPetted: 'sit',
   curious: 'curious',
+  sniffing: 'sniffing',
+  watching: 'watching',
+  carrying: 'carrying',
+  waiting: 'waiting',
 }
 
 /** How often each is chosen, against the others. */
@@ -224,6 +248,71 @@ export function wanderOff(spell: Spell, now: number): Spell {
   return { ...spell, playMs: Math.max(0, now - spell.startedAt), holdMs: 0 }
 }
 
+/** Which way of thinking a tool call of Claude's shows as. */
+export function thinkingOf(tool: string): Thinking {
+  if (['Read', 'Grep', 'Glob', 'LSP', 'WebFetch', 'WebSearch'].includes(tool))
+    return 'sniffing'
+  if (['Edit', 'Write', 'NotebookEdit'].includes(tool)) return 'carrying'
+  if (tool === 'Agent') return 'waiting'
+  return 'watching'
+}
+
+/**
+ * Claude works: the pet thinks along. Sniffing and carrying walk a little way about,
+ * watching sits and holds still, and watching a long while becomes a patient wait, lying
+ * down, which dozes off after about two minutes. Care and curiosity playing are left to
+ * finish (ADR-0005); the same thinking keeps going until its spell ends.
+ */
+export function workSpell(
+  previous: Spell | null,
+  now: number,
+  work: Work,
+  room: number,
+  random: Random,
+): Spell {
+  if (previous !== null && outranksWork(previous, now)) return previous
+  const longWait = work.thinking === 'watching' && now - work.since >= LONG_WAIT_MS
+  const behaviour: Thinking = longWait ? 'waiting' : work.thinking
+  if (previous?.behaviour === behaviour && now < spellEndsAt(previous)) return previous
+
+  const maxX = Math.max(0, room)
+  const pose = previous === null ? null : poseAt(previous, now)
+  const x = Math.min(pose?.x ?? 0, maxX)
+  const facing = pose?.facing ?? 'right'
+  const { frameMs } = PLAY[behaviour]
+  const base = { behaviour, startedAt: now, fromX: x, isHungry: false } as const
+
+  if (behaviour === 'sniffing' || behaviour === 'carrying') {
+    const toX = nearby(x, maxX, random)
+    return {
+      ...base,
+      toX,
+      facing: toX === x ? facing : toX > x ? 'right' : 'left',
+      playMs: Math.max(Math.abs(toX - x), 1) * frameMs,
+      holdMs: 0,
+    }
+  }
+
+  const playMs = frameMs * PET_FRAMES[behaviour].length
+  const holdMs =
+    behaviour === 'waiting'
+      ? WAIT_HOLD_MS
+      : Math.max(0, work.since + LONG_WAIT_MS - now - playMs)
+  return { ...base, toX: x, facing, playMs, holdMs }
+}
+
+/** The turn completed: thinking ends now, and idle life picks up. */
+export function doneWorking(spell: Spell, now: number): Spell {
+  if (!(THINKING as readonly string[]).includes(spell.behaviour)) return spell
+  return { ...spell, playMs: Math.max(0, now - spell.startedAt), holdMs: 0 }
+}
+
+function outranksWork(spell: Spell, now: number): boolean {
+  return (
+    (isCaring(spell, now) || spell.behaviour === 'curious') && now < spellEndsAt(spell)
+  )
+}
+
 function isCaring(spell: Spell, now: number): boolean {
   return (CARE as readonly string[]).includes(spell.behaviour) && now < spellEndsAt(spell)
 }
@@ -237,6 +326,18 @@ export function poseAt(spell: Spell, now: number): Pose {
   const { behaviour, facing, isHungry } = spell
   if (behaviour === 'curious') return curiousPose(spell, now)
 
+  if (behaviour === 'waiting' && elapsed >= DOZE_AFTER_MS) {
+    return {
+      behaviour: 'sleep',
+      frame: 0,
+      x: spell.toX,
+      facing,
+      hasEmptyBowl: false,
+      isMoving: false,
+      nextAt: spellEndsAt(spell),
+    }
+  }
+
   if (elapsed >= spell.playMs && behaviour !== 'walk') {
     const held = HOLD_AS[behaviour]
     return {
@@ -246,7 +347,10 @@ export function poseAt(spell: Spell, now: number): Pose {
       facing,
       hasEmptyBowl: isHungry && held === 'sit',
       isMoving: false,
-      nextAt: spellEndsAt(spell),
+      nextAt:
+        behaviour === 'waiting'
+          ? Math.min(spell.startedAt + DOZE_AFTER_MS, spellEndsAt(spell))
+          : spellEndsAt(spell),
     }
   }
 
@@ -331,6 +435,18 @@ function choose(random: Random, canWalk: boolean, mood: Mood): IdleBehaviour {
     if (pick < 0) return one
   }
   return options.at(-1)!
+}
+
+/** A spot a short walk away, either way, or here when the band has no room. */
+function nearby(x: number, maxX: number, random: Random): number {
+  const distance =
+    MIN_WALK_COLUMNS + Math.floor(random() * (MAX_WORK_WALK - MIN_WALK_COLUMNS + 1))
+  const ways = random() < 0.5 ? [-1, 1] : [1, -1]
+  for (const way of ways) {
+    const toX = Math.max(0, Math.min(maxX, x + way * distance))
+    if (Math.abs(toX - x) >= MIN_WALK_COLUMNS) return toX
+  }
+  return x
 }
 
 /** Anywhere in the band at least a short walk away. */

@@ -1,7 +1,7 @@
 // The engine shell (ADR-0005): turns the core's sprites into what each surface draws in
 // the band, the owner's `/pet` commands and coat pick into a kept pet and needs, the
-// owner's typing into curiosity, and the clock into the pet's life. No pet logic lives
-// here.
+// owner's typing into curiosity, Claude's turns and tool calls into thinking, and the
+// clock into the pet's life. No pet logic lives here.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, UiBlitResult } from 'claude-code'
@@ -14,14 +14,19 @@ import {
   CALM,
   careSpell,
   curiousSpell,
+  doneWorking,
   nextSpell,
   poseAt,
   seededRandom,
   spellEndsAt,
+  thinkingOf,
   type Mood,
   type Random,
   type Spell,
   wanderOff,
+  workSpell,
+  type Thinking,
+  type Work,
 } from '../src/core/idle'
 import {
   freshNeeds,
@@ -135,6 +140,8 @@ type Life = {
   bandColumns: number
   petColumns: number
   mood: Mood
+  /** What Claude is doing in the main turn, while one runs. */
+  work: Work | null
   random: Random | null
   shown: IdlePose | null
 }
@@ -148,6 +155,7 @@ export const register: Register = on => {
     bandColumns: 80,
     petColumns: PET_COLUMNS,
     mood: CALM,
+    work: null,
     random: null,
     shown: null,
   }
@@ -181,6 +189,32 @@ export const register: Register = on => {
     }
 
     return box
+  })
+
+  // Claude works: the pet thinks along with the main turn, never a subagent's.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) await thinkAlong($, life, 'watching')
+
+    return next(e)
+  })
+
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    await thinkAlong($, life, thinkingOf(e.tool))
+    const result = await next(e)
+    await thinkAlong($, life, 'watching')
+
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined && life.run > 0) {
+      life.work = null
+      if (life.spell !== null) life.spell = doneWorking(life.spell, await $.clock.now())
+      restart($, life)
+    }
+
+    return next(e)
   })
 
   // The owner sent or cleared the prompt: nothing left to watch.
@@ -438,6 +472,23 @@ async function runCommand($: EngineInterface, life: Life, args: string): Promise
   return outcome.reply
 }
 
+/**
+ * Claude moved on to `thinking`: the pet follows, unless what it does outranks thinking
+ * (ADR-0005). Never fails the turn or the tool call it was raised from.
+ */
+async function thinkAlong($: EngineInterface, life: Life, thinking: Thinking) {
+  if (life.run === 0) return
+  try {
+    const now = await $.clock.now()
+    life.work = { thinking, since: now }
+    life.random ??= seededRandom(now)
+    life.spell = workSpell(life.spell, now, life.work, life.room, life.random)
+    restart($, life)
+  } catch {
+    // The pet missing a beat is fine; Claude's work going on is what matters.
+  }
+}
+
 /** The pet comes to sit over the owner's caret and watch them type (ADR-0005). */
 async function watchOwner(
   $: EngineInterface,
@@ -486,7 +537,10 @@ async function tick($: EngineInterface, life: Life, run: number) {
     if (life.spell === null || now >= spellEndsAt(life.spell)) {
       const wasAsleep = life.spell?.behaviour === 'sleep'
       life.mood = moodOf(await settleNeeds($, now, wasAsleep))
-      life.spell = nextSpell(life.spell, now, life.room, life.random, life.mood)
+      life.spell =
+        life.work === null
+          ? nextSpell(life.spell, now, life.room, life.random, life.mood)
+          : workSpell(life.spell, now, life.work, life.room, life.random)
     }
     const { behaviour, frame, x, facing, hasEmptyBowl, nextAt } = poseAt(life.spell, now)
     const pose: IdlePose = { behaviour, frame, x, facing, hasEmptyBowl }

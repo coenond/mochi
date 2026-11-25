@@ -5,6 +5,8 @@ import type {
   PromptChangeInput,
   PromptEditInput,
   PromptEditResult,
+  TurnCompleteInput,
+  TurnStartInput,
   UiFocusInput,
 } from 'claude-code'
 
@@ -567,5 +569,130 @@ test('typing does not cut petting short', async ($, on) => {
   await type($, '', 'x')
 
   expect(await petSource(ui)).toBe(petted)
+  await ui.unmount()
+})
+
+/** The frames of `behaviour` as the desktop app draws them, facing either way. */
+function svgsOf(behaviour: keyof typeof PET_FRAMES, frame = 0): string[] {
+  const sprite = PET_FRAMES[behaviour][frame]!
+  return [toSvg(sprite, 'red'), toSvg(mirror(sprite), 'red')]
+}
+
+/**
+ * The turn events as the engine raises them. The test kit carries them, but its types
+ * list only the calls a plugin can make, so they are typed here once.
+ */
+function turnEvents($: Engine) {
+  return $.turn as unknown as {
+    start: (e: TurnStartInput) => Promise<unknown>
+    complete: (e: TurnCompleteInput) => Promise<unknown>
+  }
+}
+
+/** Stands in for the engine running turns and tools, the tool's run seen by `during`. */
+function engineRuns(on: On, during: (tool: string) => Promise<void> = async () => {}) {
+  on('turn.start', () => ({ turnId: 't1' }))
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  on('tool.call', async (_, e) => {
+    await during(e.tool)
+    return { result: {} }
+  })
+}
+
+async function startTurn($: Engine, on: On, during?: (tool: string) => Promise<void>) {
+  const clock = mock.clock(on)
+  engineRuns(on, during)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await turnEvents($).start({ text: 'go', turnId: 't1' })
+  return { clock, ui }
+}
+
+for (const [tool, thinking] of [
+  ['Read', 'sniffing'],
+  ['Grep', 'sniffing'],
+  ['Glob', 'sniffing'],
+  ['Bash', 'watching'],
+  ['Edit', 'carrying'],
+  ['Write', 'carrying'],
+  ['Agent', 'waiting'],
+] as const) {
+  test(`while Claude runs ${tool} the pet is ${thinking}`, async ($, on) => {
+    let seen: string | undefined
+    const { ui } = await startTurn($, on, async () => {
+      seen = await petSource(ui)
+    })
+
+    await $.tool.call({ tool, command: 'x' } as never)
+
+    expect(svgsOf(thinking)).toContain(seen)
+    await ui.unmount()
+  })
+}
+
+test('waiting on an agent, it dozes off after about two minutes', async ($, on) => {
+  let clock: { advance: (ms: number) => Promise<void> } | undefined
+  let seen: string | undefined
+  const started = await startTurn($, on, async () => {
+    await clock!.advance(121_000)
+    seen = await petSource(started.ui)
+  })
+  clock = started.clock
+
+  await $.tool.call({ tool: 'Agent', prompt: 'x' } as never)
+
+  expect(svgsOf('sleep')).toContain(seen)
+  await started.ui.unmount()
+})
+
+test('a long wait with no tool makes it lie down patiently', async ($, on) => {
+  const { clock, ui } = await startTurn($, on)
+  expect(svgsOf('watching')).toContain(await petSource(ui))
+
+  await clock.advance(31_000)
+
+  expect(svgsOf('waiting')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('when the turn completes it goes back to idle life', async ($, on) => {
+  const { clock, ui } = await startTurn($, on)
+
+  await turnEvents($).complete({
+    reason: 'answer',
+    answer: 'done',
+    durationMs: 1000,
+    isAborted: false,
+    turnId: 't1',
+  })
+  await clock.advance(1)
+
+  const thinking = (['sniffing', 'watching', 'carrying', 'waiting'] as const).flatMap(
+    one => PET_FRAMES[one].flatMap((_, i) => svgsOf(one, i)),
+  )
+  expect(thinking).not.toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test("a subagent's tool calls leave the pet as it was", async ($, on) => {
+  let seen: string | undefined
+  const { ui } = await startTurn($, on, async () => {
+    seen = await petSource(ui)
+  })
+
+  await $.tool.call({ tool: 'Read', file_path: '/x', agentId: 'a1' } as never)
+
+  expect(svgsOf('watching')).toContain(seen)
+  await ui.unmount()
+})
+
+test('the owner typing while Claude works brings the pet over to watch', async ($, on) => {
+  editor(on)
+  const { clock, ui } = await startTurn($, on)
+
+  await type($, '', 'x')
+  await clock.advance(20 * 160)
+
+  expect(curiousSvgs(0)).toContain(await petSource(ui))
   await ui.unmount()
 })

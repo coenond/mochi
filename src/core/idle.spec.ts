@@ -4,14 +4,20 @@ import {
   CALM,
   careSpell,
   curiousSpell,
+  DOZE_AFTER_MS,
+  doneWorking,
   IDLE_BEHAVIOURS,
+  LONG_WAIT_MS,
   MIN_WALK_COLUMNS,
   nextSpell,
   poseAt,
   seededRandom,
   spellEndsAt,
+  thinkingOf,
   WANDER_AFTER_MS,
   wanderOff,
+  workSpell,
+  type Work,
   type Mood,
   type Random,
   type Spell,
@@ -381,5 +387,129 @@ describe('wanderOff', () => {
 
   it('leaves anything else alone', () => {
     expect(wanderOff(WALK, 1200)).toBe(WALK)
+  })
+})
+
+describe('thinkingOf', () => {
+  it.each([
+    ['Read', 'sniffing'],
+    ['Grep', 'sniffing'],
+    ['Glob', 'sniffing'],
+    ['WebFetch', 'sniffing'],
+    ['WebSearch', 'sniffing'],
+    ['Bash', 'watching'],
+    ['Edit', 'carrying'],
+    ['Write', 'carrying'],
+    ['NotebookEdit', 'carrying'],
+    ['Agent', 'waiting'],
+    ['mcp__github__list_issues', 'watching'],
+  ] as const)('%s makes it %s', (tool, thinking) => {
+    expect(thinkingOf(tool)).toBe(thinking)
+  })
+})
+
+describe('workSpell', () => {
+  const work = (thinking: Work['thinking'], since = 0): Work => ({ thinking, since })
+  const SIT: Spell = {
+    ...WALK,
+    behaviour: 'sit',
+    fromX: 30,
+    toX: 30,
+    playMs: 3600,
+    holdMs: 20_000,
+  }
+
+  it.each(['sniffing', 'carrying'] as const)('%s walks to a spot nearby', thinking => {
+    const spell = workSpell(SIT, 1000, work(thinking), 60, always(0.9))
+    const distance = Math.abs(spell.toX - spell.fromX)
+
+    expect(spell).toMatchObject({ behaviour: thinking, fromX: 30, holdMs: 0 })
+    expect(distance).toBeGreaterThanOrEqual(MIN_WALK_COLUMNS)
+    expect(distance).toBeLessThanOrEqual(16)
+    expect(poseAt(spell, 1000)).toMatchObject({ behaviour: thinking, isMoving: true })
+  })
+
+  it('stays put in a band too narrow to walk in', () => {
+    const spell = workSpell(null, 0, work('sniffing'), 2, always(0.5))
+
+    expect(spell.toX).toBe(spell.fromX)
+  })
+
+  it('watches intently: plays once, then holds still', () => {
+    const spell = workSpell(SIT, 1000, work('watching', 1000), 60, always(0.5))
+
+    expect(spell).toMatchObject({ behaviour: 'watching', toX: 30 })
+    expect(poseAt(spell, 1000 + spell.playMs)).toMatchObject({
+      behaviour: 'watching',
+      frame: 0,
+      isMoving: false,
+      nextAt: spellEndsAt(spell),
+    })
+  })
+
+  it('lies down patiently when watching goes on a long while', () => {
+    const watching = workSpell(SIT, 0, work('watching', 0), 60, always(0.5))
+
+    expect(spellEndsAt(watching)).toBe(LONG_WAIT_MS)
+    expect(
+      workSpell(watching, LONG_WAIT_MS, work('watching', 0), 60, always(0.5)).behaviour,
+    ).toBe('waiting')
+  })
+
+  it('lies down patiently for an agent, and dozes after about two minutes', () => {
+    const spell = workSpell(SIT, 0, work('waiting'), 60, always(0.5))
+
+    expect(poseAt(spell, spell.playMs)).toMatchObject({
+      behaviour: 'waiting',
+      isMoving: false,
+    })
+    expect(poseAt(spell, spell.playMs).nextAt).toBe(DOZE_AFTER_MS)
+    expect(poseAt(spell, DOZE_AFTER_MS)).toMatchObject({
+      behaviour: 'sleep',
+      isMoving: false,
+    })
+  })
+
+  it('keeps going while the work stays the same', () => {
+    const spell = workSpell(SIT, 0, work('waiting'), 60, always(0.5))
+
+    expect(workSpell(spell, 5000, work('waiting'), 60, always(0.1))).toBe(spell)
+  })
+
+  it('switches when the tool changes', () => {
+    const sniffing = workSpell(SIT, 0, work('sniffing'), 60, always(0.5))
+
+    expect(
+      workSpell(sniffing, 300, work('carrying', 300), 60, always(0.5)).behaviour,
+    ).toBe('carrying')
+  })
+
+  it('gives way to care and to curiosity while they last (ADR-0005)', () => {
+    const eating = careSpell('eating', SIT, 0)
+    const watchingOwner = curiousSpell(SIT, 0, 30, false)
+
+    expect(workSpell(eating, 500, work('sniffing'), 60, always(0.5))).toBe(eating)
+    expect(workSpell(watchingOwner, 500, work('sniffing'), 60, always(0.5))).toBe(
+      watchingOwner,
+    )
+  })
+
+  it('is cut short by curiosity and by care', () => {
+    const sniffing = workSpell(SIT, 0, work('sniffing'), 60, always(0.5))
+
+    expect(curiousSpell(sniffing, 100, 30, false).behaviour).toBe('curious')
+    expect(careSpell('beingPetted', sniffing, 100).behaviour).toBe('beingPetted')
+  })
+})
+
+describe('doneWorking', () => {
+  it('ends thinking now, when the turn completes', () => {
+    const spell = workSpell(null, 0, { thinking: 'waiting', since: 0 }, 60, always(0.5))
+
+    expect(spellEndsAt(doneWorking(spell, 7000))).toBe(7000)
+  })
+
+  it('leaves anything else alone', () => {
+    expect(doneWorking(WALK, 1200)).toBe(WALK)
   })
 })
