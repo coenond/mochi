@@ -1,5 +1,5 @@
 ---
-status: accepted, amended by ADR-0009
+status: accepted, amended by ADR-0010
 ---
 
 # Two dim glyph controls beside the pet
