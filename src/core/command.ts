@@ -1,15 +1,17 @@
 // The `/pet` command: the owner's words in, what to keep and what to reply out.
 
 import { adopt, NO_PET_YET, rename, type AdoptionOutcome, type Pet } from './adoption'
-import { feed, freshNeeds, passTime, type Needs } from './needs'
+import { feed, freshNeeds, passTime, petting, type Needs } from './needs'
 
 /** What the store holds of the one pet: `null` for what is not there yet. */
 export type Home = { pet: Pet | null; needs: Needs | null }
 
 export type PetCommandOutcome =
-  AdoptionOutcome | { kind: 'fed'; needs: Needs; reply: string }
+  | AdoptionOutcome
+  | { kind: 'fed'; needs: Needs; reply: string }
+  | { kind: 'petted'; needs: Needs; reply: string }
 
-const USAGE = 'Usage: /pet adopt <name> [coat] · name <name> · feed · status'
+const USAGE = 'Usage: /pet adopt <name> [coat] · name <name> · feed · pet · status'
 
 export function petCommand(args: string, home: Home, now: number): PetCommandOutcome {
   const [verb, ...rest] = words(args)
@@ -17,13 +19,20 @@ export function petCommand(args: string, home: Home, now: number): PetCommandOut
 
   if (verb === 'adopt') return adopt(rest, pet, now)
   if (verb === 'name') return rename(rest, pet)
-  if (verb !== 'feed' && verb !== 'status') return reply(USAGE)
+  if (verb !== 'feed' && verb !== 'pet' && verb !== 'status') return reply(USAGE)
   if (pet === null) return reply(NO_PET_YET)
 
   // A pet adopted before it had needs is taken to be full and rested.
   const needs = passTime(home.needs ?? freshNeeds(now), now, false)
 
   if (verb === 'status') return reply(status(pet, needs))
+  if (verb === 'pet') {
+    return {
+      kind: 'petted',
+      needs: petting(needs),
+      reply: `${pet.name} leans into your hand.`,
+    }
+  }
 
   const fed = feed(needs)
   if (fed.isRefused) return reply(`${pet.name} is full.`)

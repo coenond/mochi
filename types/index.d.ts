@@ -7,7 +7,7 @@ export type Coat = 'golden' | 'light' | 'red'
 export type Pet = { name: string; coat: Coat }
 
 export type Behaviour =
-  'walk' | 'sit' | 'lieDown' | 'sleep' | 'yawn' | 'scratch' | 'eating'
+  'walk' | 'sit' | 'lieDown' | 'sleep' | 'yawn' | 'scratch' | 'eating' | 'beingPetted'
 
 /**
  * What the band draws of the pet's life: a frame of a behaviour, where, facing which way,

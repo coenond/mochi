@@ -116,7 +116,7 @@ describe('/pet', () => {
   it.each(['', 'dance', 'ADOPT Mochi'])('lists what it can do for "%s"', args => {
     expect(petCommand(args, NO_PET, NOW)).toEqual({
       kind: 'reply',
-      reply: 'Usage: /pet adopt <name> [coat] · name <name> · feed · status',
+      reply: 'Usage: /pet adopt <name> [coat] · name <name> · feed · pet · status',
     })
   })
 })
@@ -178,6 +178,28 @@ describe('/pet status', () => {
 
   it('needs a pet first', () => {
     expect(petCommand('status', NO_PET, NOW)).toMatchObject({
+      reply: 'No pup yet. /pet adopt <name> to adopt one.',
+    })
+  })
+})
+
+describe('/pet pet', () => {
+  it('pets the pet, which makes it happier', () => {
+    expect(petCommand('pet', HOME, NOW)).toEqual({
+      kind: 'petted',
+      needs: { ...NEEDS, happiness: 90 },
+      reply: 'Mochi leans into your hand.',
+    })
+  })
+
+  it('brings the needs up to now first', () => {
+    const outcome = petCommand('pet', HOME, NOW + 12 * 60 * 60_000)
+
+    expect(outcome.kind === 'petted' && outcome.needs.happiness).toBeCloseTo(80 - 50 + 10)
+  })
+
+  it('needs a pet first', () => {
+    expect(petCommand('pet', NO_PET, NOW)).toMatchObject({
       reply: 'No pup yet. /pet adopt <name> to adopt one.',
     })
   })

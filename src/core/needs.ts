@@ -22,6 +22,7 @@ const ENERGY_REFILLS_MS = 2 * HOUR
 const HAPPINESS_FADES_MS = 24 * HOUR
 
 const KIBBLE = 30
+const PETTING = 10
 const FULL_AT = 90
 const HUNGRY_UNDER = 25
 const TIRED_UNDER = 25
@@ -52,6 +53,11 @@ export function passTime(needs: Needs, now: number, isAsleep: boolean): Needs {
 export function feed(needs: Needs): { needs: Needs; isRefused: boolean } {
   if (needs.hunger >= FULL_AT) return { needs, isRefused: true }
   return { needs: { ...needs, hunger: level(needs.hunger + KIBBLE) }, isRefused: false }
+}
+
+/** The owner petting the pet: a little happier each time. */
+export function petting(needs: Needs): Needs {
+  return { ...needs, happiness: level(needs.happiness + PETTING) }
 }
 
 export function isHungry(needs: Needs): boolean {

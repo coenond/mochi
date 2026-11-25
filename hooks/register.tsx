@@ -11,7 +11,7 @@ import { toBase64 } from '../src/core/base64'
 import { petCommand } from '../src/core/command'
 import {
   CALM,
-  eatingSpell,
+  careSpell,
   nextSpell,
   poseAt,
   seededRandom,
@@ -62,6 +62,12 @@ const BOWL_COLUMNS = 3
 /** The half-block fallback is drawn a pixel to a column. */
 const FALLBACK_PET_COLUMNS = 24
 const FALLBACK_BOWL_COLUMNS = 6
+/** The care controls after the pet: two dim glyphs with their hotkeys (ADR-0008). */
+const CONTROLS_COLUMNS = 10
+const CONTROLS = [
+  { verb: 'pet', glyph: '♥', hotkey: 'p' },
+  { verb: 'feed', glyph: '∴', hotkey: 'f' },
+] as const
 /** CSS pixels on the remote surfaces: 2 per sprite pixel. */
 const SVG_SCALE = 2
 
@@ -139,8 +145,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pet',
-      description: 'Adopt, name, feed and check on your pup',
-      argumentHint: 'adopt <name> [coat] | name <name> | feed | status',
+      description: 'Adopt, name, feed, pet and check on your pup',
+      argumentHint: 'adopt <name> [coat] | name <name> | feed | pet | status',
       immediate: true,
     })
     const kept = storedPet(await $.store.get(PET_KEY))
@@ -151,28 +157,9 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'pet' }, async ($, e) => {
-    // Read the store, not this session's copy: another session may have changed the pet.
-    const current = storedPet(await $.store.get(PET_KEY))
-    const needs = storedNeeds(await $.store.get(NEEDS_KEY))
-    await update($, pet, () => current)
-    const now = await $.clock.now()
-    const outcome = petCommand(e.args, { pet: current, needs }, now)
+    const text = await runCommand($, life, e.args)
 
-    if (outcome.kind === 'adopted') {
-      await $.store.set(NEEDS_KEY, outcome.needs)
-      await keep($, life, outcome.pet)
-    } else if (outcome.kind === 'renamed') {
-      await keep($, life, outcome.pet)
-    } else if (outcome.kind === 'fed') {
-      await $.store.set(NEEDS_KEY, outcome.needs)
-      life.mood = moodOf(outcome.needs)
-      life.spell = eatingSpell(life.spell, now)
-      restart($, life)
-    } else if (outcome.kind === 'pickCoat') {
-      await update($, coatPick, () => ({ name: outcome.name, coat: COATS[0]! }))
-    }
-
-    return { text: outcome.reply, isTextDisplayOnly: true }
+    return { text, isTextDisplayOnly: true }
   })
 
   // The pup shows the coat the focus is on, so the owner sees each shade before picking.
@@ -201,15 +188,32 @@ export const register: Register = on => {
       life.room =
         e.props.bodyColumns -
         (isFallback ? FALLBACK_PET_COLUMNS : PET_COLUMNS) -
-        (life.mood.isHungry ? bowlColumns : 0)
+        (life.mood.isHungry ? bowlColumns : 0) -
+        CONTROLS_COLUMNS
       const pup = await drawPicture($, e, probe, idlePicture(adopted, pose))
       const bowl = pose.hasEmptyBowl ? await drawPicture($, e, probe, BOWL_PICTURE) : null
-      // The bowl sits in front of the pup's nose.
+      // The bowl sits in front of the pup's nose; the care controls follow the pup.
       return (
-        <Box flexDirection="row" marginLeft={Math.max(0, Math.min(pose.x, life.room))}>
+        <Box
+          flexDirection="row"
+          alignItems="center"
+          marginLeft={Math.max(0, Math.min(pose.x, life.room))}
+        >
           {pose.facing === 'left' && bowl}
           {pup}
           {pose.facing === 'right' && bowl}
+          <Box flexDirection="row" columnGap={1} marginLeft={1}>
+            {CONTROLS.map(({ verb, glyph, hotkey }) => (
+              <Button
+                key={`care:${verb}`}
+                label={glyph}
+                hotkey={hotkey}
+                plain
+                dimColor
+                onPress={() => runCommand($, life, verb)}
+              />
+            ))}
+          </Box>
         </Box>
       )
     }
@@ -366,6 +370,40 @@ function turned(sprite: Sprite): Sprite {
     TURNED.set(sprite, left)
   }
   return left
+}
+
+/**
+ * Runs `/pet <args>` against the store, keeps what it changed and starts any care
+ * reaction, and resolves the reply. The band's controls run it too and drop the reply:
+ * a press is answered by the pet's behaviour alone (ADR-0008).
+ */
+async function runCommand($: EngineInterface, life: Life, args: string): Promise<string> {
+  // Read the store, not this session's copy: another session may have changed the pet.
+  const current = storedPet(await $.store.get(PET_KEY))
+  const needs = storedNeeds(await $.store.get(NEEDS_KEY))
+  await update($, pet, () => current)
+  const now = await $.clock.now()
+  const outcome = petCommand(args, { pet: current, needs }, now)
+
+  if (outcome.kind === 'adopted') {
+    await $.store.set(NEEDS_KEY, outcome.needs)
+    await keep($, life, outcome.pet)
+  } else if (outcome.kind === 'renamed') {
+    await keep($, life, outcome.pet)
+  } else if (outcome.kind === 'fed' || outcome.kind === 'petted') {
+    await $.store.set(NEEDS_KEY, outcome.needs)
+    life.mood = moodOf(outcome.needs)
+    life.spell = careSpell(
+      outcome.kind === 'fed' ? 'eating' : 'beingPetted',
+      life.spell,
+      now,
+    )
+    restart($, life)
+  } else if (outcome.kind === 'pickCoat') {
+    await update($, coatPick, () => ({ name: outcome.name, coat: COATS[0]! }))
+  }
+
+  return outcome.reply
 }
 
 /** Keeps the pet in the store for every session, and in this one's band. */

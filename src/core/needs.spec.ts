@@ -7,6 +7,7 @@ import {
   isHungry,
   isTired,
   passTime,
+  petting,
   storedNeeds,
   type Needs,
 } from './needs'
@@ -134,5 +135,15 @@ describe('storedNeeds', () => {
     ['not a number at all', { hunger: NaN, happiness: 2, energy: 3, at: 4 }],
   ])('finds no needs in %s', (_, value) => {
     expect(storedNeeds(value)).toBeNull()
+  })
+})
+
+describe('petting', () => {
+  it('makes the pet happier', () => {
+    expect(petting({ ...FULL, happiness: 50 })).toEqual({ ...FULL, happiness: 60 })
+  })
+
+  it('never past 100', () => {
+    expect(petting({ ...FULL, happiness: 95 }).happiness).toBe(100)
   })
 })

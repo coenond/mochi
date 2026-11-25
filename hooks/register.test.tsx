@@ -192,7 +192,7 @@ test('/pet adopt without a coat lets the owner pick one in the band', async ($, 
   await ui.press({ key: 'coat:red' })
 
   expect(store.get('pet')).toEqual({ name: 'Mochi', coat: 'red' })
-  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect(await ui.find({ key: 'coat:red' })).toBeUndefined()
   expect(await ui.find({ key: 'pet' })).toBeDefined()
   await ui.unmount()
 })
@@ -378,5 +378,65 @@ test('a hungry pet sits by its empty bowl now and then', async ($, on) => {
   }
 
   expect(sawBowl).toBe(true)
+  await ui.unmount()
+})
+
+test('/pet pet makes the pet happier, and it is petted', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { happiness: 50 }),
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const before = (await ui.find({ type: 'Svg' }))?.props.source
+
+  const { text } = await runPet($, 'pet')
+
+  expect(text).toBe('Mochi leans into your hand.')
+  expect(store.get('needs')).toMatchObject({ happiness: 60 })
+  expect((await ui.find({ type: 'Svg' }))?.props.source).not.toBe(before)
+  await ui.unmount()
+})
+
+test('the band has dim ♥ and ∴ controls on hotkeys p and f (ADR-0008)', async ($, on) => {
+  const clock = mock.clock(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const controls = await ui.findAll({ type: 'Button' })
+
+    expect(controls.map(one => [one.props.label, one.props.hotkey])).toEqual([
+      ['♥', 'p'],
+      ['∴', 'f'],
+    ])
+    expect(controls.every(one => one.props.dimColor === true)).toBe(true)
+    await ui.unmount()
+  }
+})
+
+test('pressing a control pets or feeds without a word', async ($, on) => {
+  const clock = mock.clock(on)
+  const appended = mock.session(on)
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { hunger: 20, happiness: 50 }),
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  await ui.press({ key: 'care:pet' })
+  await ui.press({ key: 'care:feed' })
+
+  expect(store.get('needs')).toMatchObject({ hunger: 50, happiness: 60 })
+  expect(appended.appended()).toEqual([])
+  await ui.unmount()
+})
+
+test('the basket and the coat pick have no care controls', async ($, on) => {
+  mock.clock(on)
+  await startSession($, on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  expect(await ui.find({ key: 'care:pet' })).toBeUndefined()
   await ui.unmount()
 })

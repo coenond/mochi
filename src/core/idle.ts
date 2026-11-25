@@ -1,6 +1,7 @@
 // Idle life: which idle behaviour the pet chooses on its own, where it walks in the band,
 // and which frame shows when. Pure: time, the band's room, the pet's mood and a random
-// source come in. Eating, a reaction, plays as a spell of its own when the owner feeds.
+// source come in. Care (eating, being petted) plays as a spell of its own, cutting short
+// whatever the pet was doing: it takes top priority (ADR-0005).
 //
 // The pet lives one spell after another. A spell plays its behaviour's frames, then
 // holds one still pose with no redraw at all. Holding lasts about four times as long as
@@ -19,7 +20,12 @@ export const IDLE_BEHAVIOURS = [
 
 export type IdleBehaviour = (typeof IDLE_BEHAVIOURS)[number]
 
-export const BEHAVIOURS = [...IDLE_BEHAVIOURS, 'eating'] as const
+/** The reactions to the owner's care, which come before anything else (ADR-0005). */
+export const CARE = ['eating', 'beingPetted'] as const
+
+export type Care = (typeof CARE)[number]
+
+export const BEHAVIOURS = [...IDLE_BEHAVIOURS, ...CARE] as const
 
 /** The idle behaviours, and the reactions built so far. */
 export type Behaviour = (typeof BEHAVIOURS)[number]
@@ -79,6 +85,7 @@ const PLAY: Readonly<Record<Behaviour, { frameMs: number; passes: number }>> = {
   yawn: { frameMs: 380, passes: 1 },
   scratch: { frameMs: MIN_FRAME_MS, passes: 5 },
   eating: { frameMs: 220, passes: 2 },
+  beingPetted: { frameMs: 220, passes: 2 },
 }
 
 /** The behaviour whose first frame is held after playing. */
@@ -90,6 +97,7 @@ const HOLD_AS: Readonly<Record<Behaviour, Behaviour>> = {
   yawn: 'sit',
   scratch: 'sit',
   eating: 'sit',
+  beingPetted: 'sit',
 }
 
 /** How often each is chosen, against the others. */
@@ -147,20 +155,20 @@ export function nextSpell(
 }
 
 /**
- * The owner fed the pet: it eats where it is now, cutting short whatever it was doing,
- * and holds nothing after, so idle life picks up again once the bowl is empty.
+ * The owner fed or petted the pet: it reacts where it is now, cutting short whatever it
+ * was doing, and holds nothing after, so idle life picks up again once it is done.
  */
-export function eatingSpell(previous: Spell | null, now: number): Spell {
+export function careSpell(behaviour: Care, previous: Spell | null, now: number): Spell {
   const pose = previous === null ? null : poseAt(previous, now)
   const x = pose?.x ?? 0
-  const { frameMs, passes } = PLAY.eating
+  const { frameMs, passes } = PLAY[behaviour]
   return {
-    behaviour: 'eating',
+    behaviour,
     startedAt: now,
     fromX: x,
     toX: x,
     facing: pose?.facing ?? 'right',
-    playMs: frameMs * PET_FRAMES.eating.length * passes,
+    playMs: frameMs * PET_FRAMES[behaviour].length * passes,
     holdMs: 0,
     isHungry: false,
   }

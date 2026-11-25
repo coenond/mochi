@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CALM,
-  eatingSpell,
+  careSpell,
   IDLE_BEHAVIOURS,
   MIN_WALK_COLUMNS,
   nextSpell,
@@ -225,9 +225,9 @@ describe('needs shape idle life', () => {
   })
 })
 
-describe('eatingSpell', () => {
+describe('careSpell', () => {
   it('eats where the pet is, facing the same way, then goes back to idle life', () => {
-    const spell = eatingSpell(WALK, 1500)
+    const spell = careSpell('eating', WALK, 1500)
 
     expect(spell).toMatchObject({
       behaviour: 'eating',
@@ -245,16 +245,42 @@ describe('eatingSpell', () => {
   })
 
   it('plays the eating frames twice, a few seconds in all', () => {
-    const spell = eatingSpell(null, 0)
+    const spell = careSpell('eating', null, 0)
 
     expect(spell.playMs).toBeGreaterThanOrEqual(2000)
     expect(spell.playMs).toBeLessThanOrEqual(4000)
   })
 
   it('is followed by an idle behaviour', () => {
-    const spell = eatingSpell(null, 0)
+    const spell = careSpell('eating', null, 0)
     const after = nextSpell(spell, spellEndsAt(spell), 60, always(0.5))
 
     expect(IDLE_BEHAVIOURS).toContain(after.behaviour)
+  })
+})
+
+describe('care comes first (ADR-0005)', () => {
+  it('cuts short any idle behaviour', () => {
+    for (const behaviour of IDLE_BEHAVIOURS) {
+      const spell = { ...WALK, behaviour }
+
+      expect(careSpell('beingPetted', spell, 1200).behaviour).toBe('beingPetted')
+    }
+  })
+
+  it('lets petting cut eating short, and feeding cut petting short', () => {
+    const eating = careSpell('eating', null, 0)
+    const petted = careSpell('beingPetted', eating, 500)
+
+    expect(petted.behaviour).toBe('beingPetted')
+    expect(careSpell('eating', petted, 800).behaviour).toBe('eating')
+  })
+
+  it('plays being petted for a couple of seconds, turned to the owner where it is', () => {
+    const spell = careSpell('beingPetted', WALK, 1500)
+
+    expect(spell).toMatchObject({ fromX: 7, toX: 7, facing: 'left', holdMs: 0 })
+    expect(spell.playMs).toBeGreaterThanOrEqual(1500)
+    expect(spell.playMs).toBeLessThanOrEqual(3000)
   })
 })
