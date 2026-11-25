@@ -1,0 +1,5 @@
+{
+  "name": "mochi",
+  "owner": { "name": "coenond" },
+  "plugins": [{ "name": "mochi", "source": "./" }]
+}

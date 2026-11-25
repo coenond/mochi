@@ -2,9 +2,40 @@
 
 A cozy pixel-art golden retriever puppy for [Claude Code](https://claude.com/claude-code). Mochi lives just above your prompt, wanders around, does the odd trick, naps, and reacts to what is happening in your session: curious while you type, thinking while Claude works, worried when things break and over the moon when they work out again.
 
+![Mochi walking, doing tricks and dozing off in the band above the prompt](docs/images/mochi.gif)
+
 Feed it, pet it, give it treats you earned. It never makes a sound and never interrupts you.
 
-> Work in progress. See `docs/specs/0001-mochi-v1.md` and the open issues.
+## Install
+
+At the prompt of a Claude Code session:
+
+```
+/plugin install mochi --marketplace coenond/mochi
+```
+
+Answer `y` to add the marketplace, then press Enter for the user scope so Mochi follows you into every project. From a shell:
+
+```bash
+claude plugin install mochi --marketplace coenond/mochi
+```
+
+The band shows an empty basket until you adopt your pet.
+
+## Looking after your pet
+
+| Command                    | What it does                                                                            |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| `/pet adopt <name> [coat]` | Adopts your pet. Coats: `golden`, `light`, `red`. Leave it out to pick one in the band. |
+| `/pet name <name>`         | Renames your pet.                                                                       |
+| `/pet feed`                | Kibble, free and unlimited. A full pet says no.                                         |
+| `/pet pet`                 | Petting.                                                                                |
+| `/pet treat`               | Gives a treat you earned with a win (tests passing after they failed).                  |
+| `/pet status`              | Name, coat, needs and treats saved.                                                     |
+
+Beside the pet sit three dim controls: `♥` pet, `∴` feed and `✦` treat. Focus the band and press `p`, `f` or `t`, or click a glyph.
+
+There is one pet per owner, shared by every project and session. Its hunger, happiness and energy drift while you are away, but it never falls ill or runs off.
 
 ## Settings
 
