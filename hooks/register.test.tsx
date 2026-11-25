@@ -409,7 +409,48 @@ test('/pet pet makes the pet happier, and it is petted', async ($, on) => {
   await ui.unmount()
 })
 
-test('the band has dim ♥ and ∴ controls on hotkeys p and f (ADR-0008)', async ($, on) => {
+const TRICK_SVGS = (['spin', 'rollOver', 'playBow', 'hop'] as const).flatMap(trick =>
+  PET_FRAMES[trick].flatMap((_, i) => svgsOf(trick, i)),
+)
+
+test('/pet treat gives a saved treat: much happier, and a trick', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { happiness: 50 }),
+    treats: 2,
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  const { text } = await runPet($, 'treat')
+  await clock.advance(1)
+
+  expect(text).toBe('Mochi gobbles the treat and does a trick.')
+  expect(store.get('needs')).toMatchObject({ happiness: 80 })
+  expect(store.get('treats')).toBe(1)
+  expect(TRICK_SVGS).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('with no treats saved, nothing is given', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { happiness: 50 }),
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const before = await petSource(ui)
+
+  const { text } = await runPet($, 'treat')
+  await clock.advance(1)
+
+  expect(text).toBe('No treats saved. Mochi earns them with wins.')
+  expect(store.get('needs')).toMatchObject({ happiness: 50 })
+  expect(await petSource(ui)).toBe(before)
+  await ui.unmount()
+})
+
+test('the band has dim ♥, ∴ and ✦ controls on hotkeys p, f and t (ADR-0008)', async ($, on) => {
   const clock = mock.clock(on)
   await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
 
@@ -420,25 +461,29 @@ test('the band has dim ♥ and ∴ controls on hotkeys p and f (ADR-0008)', asyn
     expect(controls.map(one => [one.props.label, one.props.hotkey])).toEqual([
       ['♥', 'p'],
       ['∴', 'f'],
+      ['✦', 't'],
     ])
     expect(controls.every(one => one.props.dimColor === true)).toBe(true)
     await ui.unmount()
   }
 })
 
-test('pressing a control pets or feeds without a word', async ($, on) => {
+test('pressing a control pets, feeds or gives a treat without a word', async ($, on) => {
   const clock = mock.clock(on)
   const appended = mock.session(on)
   const store = await startSession($, on, {
     pet: MOCHI,
     needs: needs(clock.now(), { hunger: 20, happiness: 50 }),
+    treats: 1,
   })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   await ui.press({ key: 'care:pet' })
   await ui.press({ key: 'care:feed' })
+  await ui.press({ key: 'care:treat' })
 
-  expect(store.get('needs')).toMatchObject({ hunger: 50, happiness: 60 })
+  expect(store.get('needs')).toMatchObject({ hunger: 50, happiness: 90 })
+  expect(store.get('treats')).toBe(0)
   expect(appended.appended()).toEqual([])
   await ui.unmount()
 })

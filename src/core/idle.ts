@@ -5,6 +5,8 @@
 // and confusion, then curiosity while the owner types, then thinking while Claude works,
 // then idle life.
 //
+// Now and then idle life plays a trick of its own; a trick after a treat is care.
+//
 // The pet lives one spell after another. A spell plays its behaviour's frames, then
 // holds one still pose with no redraw at all. Holding lasts about four times as long as
 // playing, so the pet moves about a fifth of the time.
@@ -21,6 +23,11 @@ export const IDLE_BEHAVIOURS = [
 ] as const
 
 export type IdleBehaviour = (typeof IDLE_BEHAVIOURS)[number]
+
+/** Short, playful behaviours: done now and then on their own, and always after a treat. */
+export const TRICKS = ['spin', 'rollOver', 'playBow', 'hop'] as const
+
+export type Trick = (typeof TRICKS)[number]
 
 /** The reactions to the owner's care, which come before anything else (ADR-0005). */
 export const CARE = ['eating', 'beingPetted'] as const
@@ -42,13 +49,14 @@ export type WorkReaction = (typeof WORK_REACTIONS)[number]
 
 export const BEHAVIOURS = [
   ...IDLE_BEHAVIOURS,
+  ...TRICKS,
   ...CARE,
   'curious',
   ...THINKING,
   ...WORK_REACTIONS,
 ] as const
 
-/** The idle behaviours, and the reactions built so far. */
+/** The idle behaviours, the tricks, and the reactions built so far. */
 export type Behaviour = (typeof BEHAVIOURS)[number]
 
 /** How the pet's needs colour its idle life. */
@@ -73,6 +81,8 @@ export type Spell = {
   holdMs: number
   /** A hungry pet walks slower and sits by its empty bowl. */
   isHungry: boolean
+  /** A trick after a treat, which ranks as care (ADR-0005). */
+  isTreat?: boolean
   /** Curiosity only: when a `?` made it tilt its head, ears up. */
   perkedAt?: number | null
 }
@@ -122,6 +132,10 @@ const PLAY: Readonly<Record<Behaviour, { frameMs: number; passes: number }>> = {
   sleep: { frameMs: 1100, passes: 3 },
   yawn: { frameMs: 380, passes: 1 },
   scratch: { frameMs: MIN_FRAME_MS, passes: 5 },
+  spin: { frameMs: MIN_FRAME_MS, passes: 2 },
+  rollOver: { frameMs: 200, passes: 2 },
+  playBow: { frameMs: 200, passes: 2 },
+  hop: { frameMs: MIN_FRAME_MS, passes: 2 },
   eating: { frameMs: 220, passes: 2 },
   beingPetted: { frameMs: 220, passes: 2 },
   curious: { frameMs: 500, passes: 1 },
@@ -142,6 +156,10 @@ const HOLD_AS: Readonly<Record<Behaviour, Behaviour>> = {
   sleep: 'sleep',
   yawn: 'sit',
   scratch: 'sit',
+  spin: 'sit',
+  rollOver: 'sit',
+  playBow: 'sit',
+  hop: 'sit',
   eating: 'sit',
   beingPetted: 'sit',
   curious: 'curious',
@@ -155,13 +173,17 @@ const HOLD_AS: Readonly<Record<Behaviour, Behaviour>> = {
 }
 
 /** How often each is chosen, against the others. */
-const WEIGHTS: Readonly<Record<IdleBehaviour, number>> = {
+const WEIGHTS: Readonly<Record<IdleBehaviour | Trick, number>> = {
   walk: 3,
   sit: 3,
   lieDown: 2,
   sleep: 1,
   yawn: 1,
   scratch: 1,
+  spin: 0.2,
+  rollOver: 0.15,
+  playBow: 0.2,
+  hop: 0.2,
 }
 const HUNGRY_SITS = 3
 const TIRED_SLEEPS = 4
@@ -213,6 +235,11 @@ export function nextSpell(
  * was doing, and holds nothing after, so idle life picks up again once it is done.
  */
 export function careSpell(behaviour: Care, previous: Spell | null, now: number): Spell {
+  return playedHere(behaviour, previous, now)
+}
+
+/** `behaviour` played once through where the pet is now, holding nothing after. */
+function playedHere(behaviour: Behaviour, previous: Spell | null, now: number): Spell {
   const pose = previous === null ? null : poseAt(previous, now)
   const x = pose?.x ?? 0
   const { frameMs, passes } = PLAY[behaviour]
@@ -226,6 +253,15 @@ export function careSpell(behaviour: Care, previous: Spell | null, now: number):
     holdMs: 0,
     isHungry: false,
   }
+}
+
+/**
+ * The owner gave a treat: the pet does a trick where it is, any of them, cutting short
+ * whatever it was doing. It ranks as care (ADR-0005) and holds nothing after.
+ */
+export function treatSpell(previous: Spell | null, now: number, random: Random): Spell {
+  const trick = TRICKS[Math.min(TRICKS.length - 1, Math.floor(random() * TRICKS.length))]!
+  return { ...playedHere(trick, previous, now), isTreat: true }
 }
 
 /**
@@ -379,7 +415,8 @@ function isReacting(spell: Spell, now: number): boolean {
 }
 
 function isCaring(spell: Spell, now: number): boolean {
-  return (CARE as readonly string[]).includes(spell.behaviour) && now < spellEndsAt(spell)
+  const isCare = (CARE as readonly string[]).includes(spell.behaviour) || spell.isTreat
+  return isCare === true && now < spellEndsAt(spell)
 }
 
 export function spellEndsAt(spell: Spell): number {
@@ -487,12 +524,12 @@ function frameMsOf(behaviour: Behaviour, isHungry: boolean): number {
   return behaviour === 'walk' && isHungry ? HUNGRY_WALK_FRAME_MS : PLAY[behaviour].frameMs
 }
 
-function choose(random: Random, canWalk: boolean, mood: Mood): IdleBehaviour {
-  const weight = (one: IdleBehaviour) =>
+function choose(random: Random, canWalk: boolean, mood: Mood): IdleBehaviour | Trick {
+  const weight = (one: IdleBehaviour | Trick) =>
     WEIGHTS[one] *
     (one === 'sit' && mood.isHungry ? HUNGRY_SITS : 1) *
     (one === 'sleep' && mood.isTired ? TIRED_SLEEPS : 1)
-  const options = IDLE_BEHAVIOURS.filter(one => canWalk || one !== 'walk')
+  const options = [...IDLE_BEHAVIOURS, ...TRICKS].filter(one => canWalk || one !== 'walk')
   const total = options.reduce((sum, one) => sum + weight(one), 0)
   let pick = random() * total
   for (const one of options) {

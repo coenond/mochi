@@ -25,6 +25,7 @@ const KIBBLE = 30
 const PETTING = 10
 const TROUBLE = 5
 const WIN = 15
+const TREAT = 30
 const FULL_AT = 90
 const HUNGRY_UNDER = 25
 const TIRED_UNDER = 25
@@ -70,6 +71,11 @@ export function troubled(needs: Needs): Needs {
 /** A win: much happier. */
 export function won(needs: Needs): Needs {
   return { ...needs, happiness: level(needs.happiness + WIN) }
+}
+
+/** A treat: very much happier. */
+export function treat(needs: Needs): Needs {
+  return { ...needs, happiness: level(needs.happiness + TREAT) }
 }
 
 export function isHungry(needs: Needs): boolean {

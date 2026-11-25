@@ -16,6 +16,8 @@ import {
   seededRandom,
   spellEndsAt,
   thinkingOf,
+  TRICKS,
+  treatSpell,
   WANDER_AFTER_MS,
   wanderOff,
   workSpell,
@@ -24,12 +26,17 @@ import {
   type Random,
   type Spell,
 } from './idle'
+import { PET_FRAMES } from './sheet'
 
 /** A random source that always answers the same, to steer one choice. */
 const always =
   (value: number): Random =>
   () =>
     value
+
+/** A random source that makes `treatSpell` do `trick`. */
+const pick = (trick: (typeof TRICKS)[number]): Random =>
+  always((TRICKS.indexOf(trick) + 0.5) / TRICKS.length)
 
 /** Lives the pet's idle life for `ms` from 0, a spell after the other. */
 function live(ms: number, room: number, random: Random, mood: Mood = CALM): Spell[] {
@@ -128,10 +135,32 @@ describe('nextSpell', () => {
     expect(new Set(spells.map(s => s.facing))).toEqual(new Set(['left', 'right']))
   })
 
-  it('does every idle behaviour now and then', () => {
+  it('does every idle behaviour and trick now and then', () => {
     const done = new Set(live(24 * 3_600_000, 70, seededRandom(2)).map(s => s.behaviour))
 
-    expect(done).toEqual(new Set(IDLE_BEHAVIOURS))
+    expect(done).toEqual(new Set([...IDLE_BEHAVIOURS, ...TRICKS]))
+  })
+
+  it('does a trick only now and then', () => {
+    const spells = live(24 * 3_600_000, 70, seededRandom(3))
+    const tricks = spells.filter(s => (TRICKS as readonly string[]).includes(s.behaviour))
+
+    expect(tricks.length / spells.length).toBeGreaterThan(0.01)
+    expect(tricks.length / spells.length).toBeLessThan(0.1)
+  })
+
+  it('plays a trick twice, then sits still', () => {
+    const trick = live(24 * 3_600_000, 70, seededRandom(3)).find(s =>
+      (TRICKS as readonly string[]).includes(s.behaviour),
+    )!
+    const frames = PET_FRAMES[trick.behaviour].length
+
+    expect(trick.playMs % (2 * frames)).toBe(0)
+    expect(poseAt(trick, trick.startedAt + trick.playMs - 1).isMoving).toBe(true)
+    expect(poseAt(trick, trick.startedAt + trick.playMs)).toMatchObject({
+      behaviour: 'sit',
+      isMoving: false,
+    })
   })
 
   it.each([1, 2, 3, 4, 5])('moves about a fifth of the time (seed %i)', seed => {
@@ -159,7 +188,7 @@ describe('poseAt', () => {
     expect(poseAt(WALK, spellEndsAt(WALK)).x).toBe(4)
   })
 
-  it.each(IDLE_BEHAVIOURS)(
+  it.each([...IDLE_BEHAVIOURS, ...TRICKS])(
     'redraws %s at no more than about 6 frames a second',
     behaviour => {
       const spell = { ...WALK, behaviour, toX: WALK.fromX, playMs: 60_000 }
@@ -602,5 +631,50 @@ describe('reactionSpell', () => {
     expect(workSpell(worried, REACTION_MS, work, 60, always(0.5)).behaviour).toBe(
       'sniffing',
     )
+  })
+})
+
+describe('treatSpell', () => {
+  it('does a trick where the pet is, cutting short what it was doing', () => {
+    const spell = treatSpell(WALK, 1480, pick('hop'))
+
+    expect(spell).toMatchObject({ behaviour: 'hop', fromX: 7, toX: 7, holdMs: 0 })
+    expect(poseAt(spell, 1480)).toMatchObject({ behaviour: 'hop', isMoving: true })
+  })
+
+  it('picks any of the tricks', () => {
+    const picked = new Set(
+      Array.from({ length: 40 }, (_, i) => treatSpell(null, 0, always(i / 40)).behaviour),
+    )
+
+    expect(picked).toEqual(new Set(TRICKS))
+  })
+
+  it('comes first, like other care (ADR-0005)', () => {
+    const trick = treatSpell(null, 0, pick('spin'))
+    const work: Work = { thinking: 'sniffing', since: 0 }
+
+    expect(reactionSpell('worried', trick, 100, 1)).toBe(trick)
+    expect(curiousSpell(trick, 100, 30, false)).toBe(trick)
+    expect(workSpell(trick, 100, work, 60, always(0.5))).toBe(trick)
+  })
+
+  it('cuts care and reactions short', () => {
+    const eating = careSpell('eating', null, 0)
+    const worried = reactionSpell('worried', null, 0, 1)
+
+    expect(treatSpell(eating, 100, pick('spin')).behaviour).toBe('spin')
+    expect(treatSpell(worried, 100, pick('spin')).behaviour).toBe('spin')
+  })
+
+  it('a trick done on its own outranks nothing', () => {
+    const trick = live(24 * 3_600_000, 70, seededRandom(3)).find(s =>
+      (TRICKS as readonly string[]).includes(s.behaviour),
+    )!
+    const work: Work = { thinking: 'sniffing', since: 0 }
+    const now = trick.startedAt + 100
+
+    expect(curiousSpell(trick, now, 30, false).behaviour).toBe('curious')
+    expect(workSpell(trick, now, work, 60, always(0.5)).behaviour).toBe('sniffing')
   })
 })

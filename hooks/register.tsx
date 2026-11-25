@@ -28,6 +28,7 @@ import {
   seededRandom,
   spellEndsAt,
   thinkingOf,
+  treatSpell,
   type Mood,
   type Random,
   type Spell,
@@ -89,13 +90,14 @@ const BOWL_COLUMNS = 3
 /** The half-block fallback is drawn a pixel to a column. */
 const FALLBACK_PET_COLUMNS = 24
 const FALLBACK_BOWL_COLUMNS = 6
-/** The care controls after the pet: two dim glyphs with their hotkeys (ADR-0008). */
-const CONTROLS_COLUMNS = 10
+/** The care controls after the pet: three dim glyphs with their hotkeys (ADR-0008). */
+const CONTROLS_COLUMNS = 15
 /** The prompt's text starts after its `> ` mark. */
 const PROMPT_INDENT = 2
 const CONTROLS = [
   { verb: 'pet', glyph: '♥', hotkey: 'p' },
   { verb: 'feed', glyph: '∴', hotkey: 'f' },
+  { verb: 'treat', glyph: '✦', hotkey: 't' },
 ] as const
 /** CSS pixels on the remote surfaces: 2 per sprite pixel. */
 const SVG_SCALE = 2
@@ -189,8 +191,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pet',
-      description: 'Adopt, name, feed, pet and check on your pup',
-      argumentHint: 'adopt <name> [coat] | name <name> | feed | pet | status',
+      description: 'Adopt, name, feed, pet, treat and check on your pup',
+      argumentHint: 'adopt <name> [coat] | name <name> | feed | pet | treat | status',
       immediate: true,
     })
     const kept = storedPet(await $.store.get(PET_KEY))
@@ -531,6 +533,13 @@ async function runCommand($: EngineInterface, life: Life, args: string): Promise
       life.spell,
       now,
     )
+    restart($, life)
+  } else if (outcome.kind === 'treated') {
+    await $.store.set(NEEDS_KEY, outcome.needs)
+    await $.store.set(TREATS_KEY, outcome.treats)
+    life.mood = moodOf(outcome.needs)
+    life.random ??= seededRandom(now)
+    life.spell = treatSpell(life.spell, now, life.random)
     restart($, life)
   } else if (outcome.kind === 'pickCoat') {
     await update($, coatPick, () => ({ name: outcome.name, coat: COATS[0]! }))

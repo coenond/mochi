@@ -8,6 +8,7 @@ import {
   isTired,
   passTime,
   petting,
+  treat,
   troubled,
   won,
   storedNeeds,
@@ -167,5 +168,15 @@ describe('won', () => {
 
   it('never past 100', () => {
     expect(won({ ...FULL, happiness: 95 }).happiness).toBe(100)
+  })
+})
+
+describe('treat', () => {
+  it('makes the pet much happier', () => {
+    expect(treat({ ...FULL, happiness: 50 })).toEqual({ ...FULL, happiness: 80 })
+  })
+
+  it('never past 100', () => {
+    expect(treat({ ...FULL, happiness: 90 }).happiness).toBe(100)
   })
 })
