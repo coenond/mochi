@@ -67,7 +67,7 @@ import {
   type ToolCallEnd,
   type Trouble,
 } from '../src/core/trouble'
-import { draftTone, toneOf, type Tone } from '../src/core/tone'
+import { draftTone, modelToneOf, toneOf, TONES, type Tone } from '../src/core/tone'
 import {
   COATS,
   mirror,
@@ -184,7 +184,9 @@ type Life = {
   shownEmote: string | null
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  /** Model tone (ADR-0002): off unless the owner turns it on. */
+  const isModelTone = options.modelTone === true
   const probe: Probe = { isRunning: false, shown: undefined }
   const life: Life = {
     run: 0,
@@ -240,7 +242,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const isOwners = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
     if (life.run > 0 && isOwners && e.command === undefined && e.isMeta !== true) {
-      void hearOwner($, life, e.text)
+      void hearOwner($, life, e.text, isModelTone)
     }
 
     return next(e)
@@ -677,11 +679,22 @@ async function watchOwner(
   restart($, life)
 }
 
-/** The owner sent `text`: the pet reacts to its tone. Never fails the prompt. */
-async function hearOwner($: EngineInterface, life: Life, text: string) {
+/**
+ * The owner sent `text`: the pet reacts to its tone, read by a small model when model
+ * tone is on and by the heuristics when it is off or the call is not answered (ADR-0002).
+ * Never fails or holds up the prompt.
+ */
+async function hearOwner(
+  $: EngineInterface,
+  life: Life,
+  text: string,
+  isModelTone: boolean,
+) {
   try {
     life.draftTone = 'neutral'
-    const tone = toneOf(text)
+    const tone = isModelTone
+      ? modelToneOf(await $.model.classify(text, TONES).catch(() => undefined), text)
+      : toneOf(text)
     if (tone === 'neutral') return
     const now = await $.clock.now()
     const toX = caretX(life, text, text.length)

@@ -171,3 +171,11 @@ export function draftTone(
     ? { tone, isNew: true }
     : { tone, isNew: false }
 }
+
+/**
+ * The tone of `text` as model tone read it (ADR-0002): the label the model named, or the
+ * heuristics' tone when it named none, as when the call was not answered.
+ */
+export function modelToneOf(answer: string | undefined, text: string): Tone {
+  return TONES.find(tone => tone === answer) ?? toneOf(text)
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { draftTone, toneOf, type Tone } from './tone'
+import { draftTone, modelToneOf, toneOf, type Tone } from './tone'
 
 describe('toneOf', () => {
   const table: [string, Tone][] = [
@@ -83,5 +83,17 @@ describe('draftTone', () => {
 
   it('a neutral draft is nothing new', () => {
     expect(draftTone('angry', 'add a test')).toEqual({ tone: 'neutral', isNew: false })
+  })
+})
+
+describe('modelToneOf', () => {
+  it('takes the tone the model named', () => {
+    expect(modelToneOf('sad', 'thanks, that works')).toBe('sad')
+    expect(modelToneOf('neutral', 'wtf is this')).toBe('neutral')
+  })
+
+  it('falls back to the heuristics when the model named no tone', () => {
+    expect(modelToneOf(undefined, 'wtf is this')).toBe('angry')
+    expect(modelToneOf('furious', 'thanks!')).toBe('happy')
   })
 })
