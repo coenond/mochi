@@ -13,13 +13,23 @@ export type Behaviour =
   | 'sleep'
   | 'yawn'
   | 'scratch'
+  | 'spin'
+  | 'rollOver'
+  | 'playBow'
+  | 'hop'
   | 'eating'
   | 'beingPetted'
+  | 'wagging'
+  | 'shrinkingBack'
+  | 'comingClose'
   | 'curious'
   | 'sniffing'
   | 'watching'
   | 'carrying'
   | 'waiting'
+  | 'worried'
+  | 'celebrating'
+  | 'confused'
 
 /**
  * What the band draws of the pet's life: a frame of a behaviour, where, facing which way,
@@ -54,6 +64,8 @@ declare module 'claude-code' {
       pet: Shaped<Pet | null>
       coatPick: Shaped<CoatPick>
       idlePose: Shaped<IdlePose>
+      /** The emote beside the pet, or `null` when it says nothing. */
+      emote: string | null
     }
   }
 }

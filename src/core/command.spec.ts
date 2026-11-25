@@ -116,7 +116,8 @@ describe('/pet', () => {
   it.each(['', 'dance', 'ADOPT Mochi'])('lists what it can do for "%s"', args => {
     expect(petCommand(args, NO_PET, NOW)).toEqual({
       kind: 'reply',
-      reply: 'Usage: /pet adopt <name> [coat] · name <name> · feed · pet · status',
+      reply:
+        'Usage: /pet adopt <name> [coat] · name <name> · feed · pet · treat · status',
     })
   })
 })
@@ -170,6 +171,14 @@ describe('/pet status', () => {
     })
   })
 
+  it('counts the treats earned', () => {
+    expect(
+      petCommand('status', { pet: MOCHI, needs: NEEDS, treats: 2 }, NOW),
+    ).toMatchObject({
+      reply: expect.stringContaining('Treats saved: 2.'),
+    })
+  })
+
   it('brings the needs up to now first', () => {
     expect(petCommand('status', HOME, NOW + 8 * 60 * 60_000)).toMatchObject({
       reply: expect.stringContaining('Hunger 0,'),
@@ -200,6 +209,38 @@ describe('/pet pet', () => {
 
   it('needs a pet first', () => {
     expect(petCommand('pet', NO_PET, NOW)).toMatchObject({
+      reply: 'No pup yet. /pet adopt <name> to adopt one.',
+    })
+  })
+})
+
+describe('/pet treat', () => {
+  it('gives a saved treat: much happier, one treat fewer', () => {
+    expect(petCommand('treat', { ...HOME, treats: 2 }, NOW)).toEqual({
+      kind: 'treated',
+      needs: { ...NEEDS, happiness: 100 },
+      treats: 1,
+      reply: 'Mochi gobbles the treat and does a trick.',
+    })
+  })
+
+  it('brings the needs up to now first', () => {
+    const outcome = petCommand('treat', { ...HOME, treats: 1 }, NOW + 12 * 60 * 60_000)
+
+    expect(outcome.kind === 'treated' && outcome.needs.happiness).toBeCloseTo(
+      80 - 50 + 30,
+    )
+  })
+
+  it('gives nothing with no treats saved', () => {
+    expect(petCommand('treat', HOME, NOW)).toEqual({
+      kind: 'reply',
+      reply: 'No treats saved. Mochi earns them with wins.',
+    })
+  })
+
+  it('needs a pet first', () => {
+    expect(petCommand('treat', { ...NO_PET, treats: 3 }, NOW)).toMatchObject({
       reply: 'No pup yet. /pet adopt <name> to adopt one.',
     })
   })

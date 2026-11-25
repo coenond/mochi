@@ -29,7 +29,7 @@ _Avoid_: state, animation, mode, action
 
 **Trick**: a short, playful behaviour: spin, roll over, play bow, hop. Done now and then on its own, and always after a treat.
 
-**Reaction**: a behaviour caused by something happening: curious, thinking, worried, celebrating, confused, eating, being petted.
+**Reaction**: a behaviour caused by something happening: curious, thinking, worried, celebrating, confused, eating, being petted, and the reactions to tone: wagging (happy), shrinking back (angry) and coming close (sad), where the pet walks over to the caret and lies down beside it.
 
 **Emote**: the short, dim text beside the pet that hints at how it feels, such as `*sniff*`, `zzz` or `hungry…`. Never a sentence, never a request.
 _Avoid_: speech bubble, message, notification

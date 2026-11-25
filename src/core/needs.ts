@@ -23,6 +23,9 @@ const HAPPINESS_FADES_MS = 24 * HOUR
 
 const KIBBLE = 30
 const PETTING = 10
+const TROUBLE = 5
+const WIN = 15
+const TREAT = 30
 const FULL_AT = 90
 const HUNGRY_UNDER = 25
 const TIRED_UNDER = 25
@@ -58,6 +61,21 @@ export function feed(needs: Needs): { needs: Needs; isRefused: boolean } {
 /** The owner petting the pet: a little happier each time. */
 export function petting(needs: Needs): Needs {
   return { ...needs, happiness: level(needs.happiness + PETTING) }
+}
+
+/** Trouble in the session: a little less happy each time. */
+export function troubled(needs: Needs): Needs {
+  return { ...needs, happiness: level(needs.happiness - TROUBLE) }
+}
+
+/** A win: much happier. */
+export function won(needs: Needs): Needs {
+  return { ...needs, happiness: level(needs.happiness + WIN) }
+}
+
+/** A treat: very much happier. */
+export function treat(needs: Needs): Needs {
+  return { ...needs, happiness: level(needs.happiness + TREAT) }
 }
 
 export function isHungry(needs: Needs): boolean {

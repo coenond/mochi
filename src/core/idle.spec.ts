@@ -11,9 +11,14 @@ import {
   MIN_WALK_COLUMNS,
   nextSpell,
   poseAt,
+  REACTION_MS,
+  reactionSpell,
   seededRandom,
   spellEndsAt,
   thinkingOf,
+  toneSpell,
+  TRICKS,
+  treatSpell,
   WANDER_AFTER_MS,
   wanderOff,
   workSpell,
@@ -22,12 +27,17 @@ import {
   type Random,
   type Spell,
 } from './idle'
+import { PET_FRAMES } from './sheet'
 
 /** A random source that always answers the same, to steer one choice. */
 const always =
   (value: number): Random =>
   () =>
     value
+
+/** A random source that makes `treatSpell` do `trick`. */
+const pick = (trick: (typeof TRICKS)[number]): Random =>
+  always((TRICKS.indexOf(trick) + 0.5) / TRICKS.length)
 
 /** Lives the pet's idle life for `ms` from 0, a spell after the other. */
 function live(ms: number, room: number, random: Random, mood: Mood = CALM): Spell[] {
@@ -126,10 +136,32 @@ describe('nextSpell', () => {
     expect(new Set(spells.map(s => s.facing))).toEqual(new Set(['left', 'right']))
   })
 
-  it('does every idle behaviour now and then', () => {
+  it('does every idle behaviour and trick now and then', () => {
     const done = new Set(live(24 * 3_600_000, 70, seededRandom(2)).map(s => s.behaviour))
 
-    expect(done).toEqual(new Set(IDLE_BEHAVIOURS))
+    expect(done).toEqual(new Set([...IDLE_BEHAVIOURS, ...TRICKS]))
+  })
+
+  it('does a trick only now and then', () => {
+    const spells = live(24 * 3_600_000, 70, seededRandom(3))
+    const tricks = spells.filter(s => (TRICKS as readonly string[]).includes(s.behaviour))
+
+    expect(tricks.length / spells.length).toBeGreaterThan(0.01)
+    expect(tricks.length / spells.length).toBeLessThan(0.1)
+  })
+
+  it('plays a trick twice, then sits still', () => {
+    const trick = live(24 * 3_600_000, 70, seededRandom(3)).find(s =>
+      (TRICKS as readonly string[]).includes(s.behaviour),
+    )!
+    const frames = PET_FRAMES[trick.behaviour].length
+
+    expect(trick.playMs % (2 * frames)).toBe(0)
+    expect(poseAt(trick, trick.startedAt + trick.playMs - 1).isMoving).toBe(true)
+    expect(poseAt(trick, trick.startedAt + trick.playMs)).toMatchObject({
+      behaviour: 'sit',
+      isMoving: false,
+    })
   })
 
   it.each([1, 2, 3, 4, 5])('moves about a fifth of the time (seed %i)', seed => {
@@ -157,7 +189,7 @@ describe('poseAt', () => {
     expect(poseAt(WALK, spellEndsAt(WALK)).x).toBe(4)
   })
 
-  it.each(IDLE_BEHAVIOURS)(
+  it.each([...IDLE_BEHAVIOURS, ...TRICKS])(
     'redraws %s at no more than about 6 frames a second',
     behaviour => {
       const spell = { ...WALK, behaviour, toX: WALK.fromX, playMs: 60_000 }
@@ -511,5 +543,263 @@ describe('doneWorking', () => {
 
   it('leaves anything else alone', () => {
     expect(doneWorking(WALK, 1200)).toBe(WALK)
+  })
+})
+
+describe('reactionSpell', () => {
+  it.each(['worried', 'celebrating', 'confused'] as const)(
+    '%s plays where the pet is, and lasts about five seconds',
+    reaction => {
+      const spell = reactionSpell(reaction, WALK, 1480, 1)
+
+      expect(spell).toMatchObject({
+        behaviour: reaction,
+        fromX: 7,
+        toX: 7,
+        facing: 'left',
+      })
+      expect(spellEndsAt(spell) - 1480).toBe(REACTION_MS)
+      expect(poseAt(spell, 1480)).toMatchObject({ behaviour: reaction, isMoving: true })
+    },
+  )
+
+  it('moves a while, then holds still for the rest', () => {
+    const spell = reactionSpell('worried', null, 0, 1)
+
+    expect(spell.playMs).toBeLessThan(REACTION_MS)
+    expect(poseAt(spell, spell.playMs)).toMatchObject({
+      behaviour: 'worried',
+      frame: 0,
+      isMoving: false,
+      nextAt: REACTION_MS,
+    })
+  })
+
+  it('more trouble in the same turn keeps it worried for longer', () => {
+    const once = reactionSpell('worried', null, 0, 1)
+    const twice = reactionSpell('worried', once, 1000, 2)
+    const often = reactionSpell('worried', twice, 2000, 9)
+
+    expect(spellEndsAt(twice) - 1000).toBeGreaterThan(REACTION_MS)
+    expect(spellEndsAt(often) - 2000).toBeGreaterThan(spellEndsAt(twice) - 1000)
+    expect(spellEndsAt(often) - 2000).toBeLessThanOrEqual(3 * REACTION_MS)
+  })
+
+  it('a win or confusion lasts the same however much trouble came before', () => {
+    expect(spellEndsAt(reactionSpell('celebrating', null, 0, 4))).toBe(REACTION_MS)
+  })
+
+  it('gives way to care playing (ADR-0005)', () => {
+    const eating = careSpell('eating', null, 0)
+
+    expect(reactionSpell('worried', eating, 100, 1)).toBe(eating)
+  })
+
+  it('is cut short by care', () => {
+    const worried = reactionSpell('worried', null, 0, 1)
+
+    expect(careSpell('beingPetted', worried, 100).behaviour).toBe('beingPetted')
+  })
+
+  it('outranks curiosity and thinking while it lasts', () => {
+    const worried = reactionSpell('worried', null, 0, 1)
+    const work: Work = { thinking: 'sniffing', since: 0 }
+
+    expect(curiousSpell(worried, 100, 30, false)).toBe(worried)
+    expect(workSpell(worried, 100, work, 60, always(0.5))).toBe(worried)
+    expect(doneWorking(worried, 100)).toBe(worried)
+    expect(wanderOff(worried, 100)).toBe(worried)
+  })
+
+  it('cuts curiosity and thinking short', () => {
+    const watching = curiousSpell(null, 0, 30, false)
+    const sniffing = workSpell(
+      null,
+      0,
+      { thinking: 'sniffing', since: 0 },
+      60,
+      always(0.5),
+    )
+
+    expect(reactionSpell('confused', watching, 100, 0).behaviour).toBe('confused')
+    expect(reactionSpell('worried', sniffing, 100, 1).behaviour).toBe('worried')
+  })
+
+  it('once over, thinking picks up again', () => {
+    const worried = reactionSpell('worried', null, 0, 1)
+    const work: Work = { thinking: 'sniffing', since: 0 }
+
+    expect(workSpell(worried, REACTION_MS, work, 60, always(0.5)).behaviour).toBe(
+      'sniffing',
+    )
+  })
+})
+
+describe('treatSpell', () => {
+  it('does a trick where the pet is, cutting short what it was doing', () => {
+    const spell = treatSpell(WALK, 1480, pick('hop'))
+
+    expect(spell).toMatchObject({ behaviour: 'hop', fromX: 7, toX: 7, holdMs: 0 })
+    expect(poseAt(spell, 1480)).toMatchObject({ behaviour: 'hop', isMoving: true })
+  })
+
+  it('picks any of the tricks', () => {
+    const picked = new Set(
+      Array.from({ length: 40 }, (_, i) => treatSpell(null, 0, always(i / 40)).behaviour),
+    )
+
+    expect(picked).toEqual(new Set(TRICKS))
+  })
+
+  it('comes first, like other care (ADR-0005)', () => {
+    const trick = treatSpell(null, 0, pick('spin'))
+    const work: Work = { thinking: 'sniffing', since: 0 }
+
+    expect(reactionSpell('worried', trick, 100, 1)).toBe(trick)
+    expect(curiousSpell(trick, 100, 30, false)).toBe(trick)
+    expect(workSpell(trick, 100, work, 60, always(0.5))).toBe(trick)
+  })
+
+  it('cuts care and reactions short', () => {
+    const eating = careSpell('eating', null, 0)
+    const worried = reactionSpell('worried', null, 0, 1)
+
+    expect(treatSpell(eating, 100, pick('spin')).behaviour).toBe('spin')
+    expect(treatSpell(worried, 100, pick('spin')).behaviour).toBe('spin')
+  })
+
+  it('a trick done on its own outranks nothing', () => {
+    const trick = live(24 * 3_600_000, 70, seededRandom(3)).find(s =>
+      (TRICKS as readonly string[]).includes(s.behaviour),
+    )!
+    const work: Work = { thinking: 'sniffing', since: 0 }
+    const now = trick.startedAt + 100
+
+    expect(curiousSpell(trick, now, 30, false).behaviour).toBe('curious')
+    expect(workSpell(trick, now, work, 60, always(0.5)).behaviour).toBe('sniffing')
+  })
+})
+
+describe('toneSpell', () => {
+  const SIT: Spell = { ...WALK, behaviour: 'sit', toX: 10, playMs: 3600, holdMs: 20_000 }
+
+  it('happy: wags where it is for about five seconds', () => {
+    const spell = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(spell).toMatchObject({ behaviour: 'wagging', fromX: 10, toX: 10 })
+    expect(spellEndsAt(spell) - 1000).toBe(REACTION_MS)
+    expect(poseAt(spell, 1000)).toMatchObject({ behaviour: 'wagging', isMoving: true })
+    expect(poseAt(spell, 1000 + spell.playMs)).toMatchObject({ isMoving: false })
+  })
+
+  it('angry: shrinks back away from the caret, still facing it, then holds', () => {
+    const spell = toneSpell('angry', SIT, 1000, 14, 60)
+
+    expect(spell).toMatchObject({
+      behaviour: 'shrinkingBack',
+      fromX: 10,
+      toX: 10 - MIN_WALK_COLUMNS,
+      facing: 'right',
+    })
+    expect(spellEndsAt(spell) - 1000).toBe(REACTION_MS)
+    expect(poseAt(spell, 1000 + spell.playMs)).toMatchObject({
+      behaviour: 'shrinkingBack',
+      frame: 0,
+      x: 10 - MIN_WALK_COLUMNS,
+      isMoving: false,
+    })
+  })
+
+  it('angry: backs the other way when the caret is to its left, and stays in the band', () => {
+    expect(toneSpell('angry', SIT, 1000, 2, 60)).toMatchObject({
+      toX: 10 + MIN_WALK_COLUMNS,
+      facing: 'left',
+    })
+    expect(toneSpell('angry', { ...SIT, fromX: 1, toX: 1 }, 1000, 20, 60)).toMatchObject({
+      toX: 0,
+    })
+  })
+
+  it('sad: comes over to the caret and lies down beside it', () => {
+    const spell = toneSpell('sad', SIT, 1000, 30, 60)
+
+    expect(spell).toMatchObject({
+      behaviour: 'comingClose',
+      fromX: 10,
+      toX: 30,
+      facing: 'right',
+    })
+    expect(poseAt(spell, 1000 + 5 * 160)).toMatchObject({ behaviour: 'walk', x: 15 })
+    expect(poseAt(spell, 1000 + 20 * 160)).toMatchObject({
+      behaviour: 'lieDown',
+      frame: 0,
+      x: 30,
+      isMoving: false,
+      nextAt: spellEndsAt(spell),
+    })
+    expect(spellEndsAt(spell) - (1000 + 20 * 160)).toBe(REACTION_MS)
+  })
+
+  it('sad: comes no further than the band allows', () => {
+    expect(toneSpell('sad', SIT, 1000, 90, 40)).toMatchObject({ toX: 40 })
+  })
+
+  it('keeps going while the same tone plays', () => {
+    const wagging = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(toneSpell('happy', wagging, 3000, 40, 60)).toBe(wagging)
+  })
+
+  it('a new tone cuts the last one short', () => {
+    const wagging = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(toneSpell('sad', wagging, 2000, 30, 60).behaviour).toBe('comingClose')
+  })
+
+  it('gives way to care and to trouble, wins and confusion playing (ADR-0005)', () => {
+    const eating = careSpell('eating', SIT, 1000)
+    const worried = reactionSpell('worried', SIT, 1000, 1)
+
+    expect(toneSpell('happy', eating, 1500, 30, 60)).toBe(eating)
+    expect(toneSpell('angry', worried, 1500, 30, 60)).toBe(worried)
+  })
+
+  it('is cut short by care and by trouble, wins and confusion', () => {
+    const wagging = toneSpell('happy', SIT, 1000, 30, 60)
+
+    expect(careSpell('beingPetted', wagging, 1500).behaviour).toBe('beingPetted')
+    expect(reactionSpell('worried', wagging, 1500, 1).behaviour).toBe('worried')
+  })
+
+  it('cuts curiosity and thinking short, and neither cuts it short (ADR-0005)', () => {
+    const watching = curiousSpell(SIT, 1000, 10, false)
+    const thinking = workSpell(
+      SIT,
+      1000,
+      { thinking: 'watching', since: 1000 },
+      60,
+      always(0),
+    )
+    const sad = toneSpell('sad', watching, 1500, 30, 60)
+
+    expect(sad.behaviour).toBe('comingClose')
+    expect(toneSpell('happy', thinking, 1500, 30, 60).behaviour).toBe('wagging')
+    expect(curiousSpell(sad, 2000, 30, true)).toBe(sad)
+    expect(
+      workSpell(sad, 2000, { thinking: 'sniffing', since: 2000 }, 60, always(0)),
+    ).toBe(sad)
+  })
+
+  it('needs colour it: a hungry or tired pet wags slower, a hungry one comes over slower', () => {
+    const calm = toneSpell('happy', SIT, 1000, 30, 60)
+    const hungry = toneSpell('happy', SIT, 1000, 30, 60, HUNGRY)
+    const tired = toneSpell('happy', SIT, 1000, 30, 60, TIRED)
+
+    expect(poseAt(calm, 1000).nextAt).toBeLessThan(poseAt(hungry, 1000).nextAt)
+    expect(poseAt(tired, 1000).nextAt).toBe(poseAt(hungry, 1000).nextAt)
+    expect(spellEndsAt(hungry) - 1000).toBe(REACTION_MS)
+
+    const close = toneSpell('sad', SIT, 1000, 30, 60, HUNGRY)
+    expect(poseAt(close, 1000 + 20 * 160)).toMatchObject({ behaviour: 'walk' })
   })
 })

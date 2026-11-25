@@ -1,15 +1,23 @@
 // The engine shell (ADR-0005): turns the core's sprites into what each surface draws in
 // the band, the owner's `/pet` commands and coat pick into a kept pet and needs, the
-// owner's typing into curiosity, Claude's turns and tool calls into thinking, and the
-// clock into the pet's life. No pet logic lives here.
+// owner's typing into curiosity, what they write into tone, Claude's turns and tool calls into thinking, how those
+// calls end into trouble, wins and confusion, and the clock into the pet's life. No pet
+// logic lives here.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderInput, UiBlitResult } from 'claude-code'
+import type {
+  EngineInterface,
+  Register,
+  RenderInput,
+  ToolCallResult,
+  UiBlitResult,
+} from 'claude-code'
 
 import type { CoatPick, IdlePose, TerminalDrawsImages } from '../types'
 import { storedPet, type Pet } from '../src/core/adoption'
 import { toBase64 } from '../src/core/base64'
 import { petCommand } from '../src/core/command'
+import { emoteAt, noticeSpell, NO_EMOTE, type EmoteState } from '../src/core/emote'
 import {
   CALM,
   careSpell,
@@ -17,9 +25,12 @@ import {
   doneWorking,
   nextSpell,
   poseAt,
+  reactionSpell,
   seededRandom,
   spellEndsAt,
   thinkingOf,
+  toneSpell,
+  treatSpell,
   type Mood,
   type Random,
   type Spell,
@@ -34,6 +45,8 @@ import {
   isTired,
   passTime,
   storedNeeds,
+  troubled,
+  won,
   type Needs,
 } from '../src/core/needs'
 import {
@@ -46,6 +59,15 @@ import {
   PET_FRAMES,
   PET_SIT,
 } from '../src/core/sheet'
+import {
+  NO_TROUBLE,
+  noticeToolCall,
+  storedTreats,
+  turnStarted,
+  type ToolCallEnd,
+  type Trouble,
+} from '../src/core/trouble'
+import { draftTone, toneOf, type Tone } from '../src/core/tone'
 import {
   COATS,
   mirror,
@@ -60,6 +82,7 @@ import {
 /** The pet's keys in the cross-session store, shared by every project and session. */
 const PET_KEY = 'pet'
 const NEEDS_KEY = 'needs'
+const TREATS_KEY = 'treats'
 
 /** The band is 3 text rows; a picture 24 pixels tall fills them at 4 pixels a column. */
 const BAND_ROWS = 3
@@ -70,13 +93,18 @@ const BOWL_COLUMNS = 3
 /** The half-block fallback is drawn a pixel to a column. */
 const FALLBACK_PET_COLUMNS = 24
 const FALLBACK_BOWL_COLUMNS = 6
-/** The care controls after the pet: two dim glyphs with their hotkeys (ADR-0008). */
-const CONTROLS_COLUMNS = 10
+/**
+ * The care controls: three dim glyphs with their hotkeys, one above the other at the
+ * band's right edge (ADR-0008, ADR-0009). A terminal draws each as `p: ♥`; one more
+ * column keeps the pet off them.
+ */
+const CONTROLS_COLUMNS = 5
 /** The prompt's text starts after its `> ` mark. */
 const PROMPT_INDENT = 2
 const CONTROLS = [
   { verb: 'pet', glyph: '♥', hotkey: 'p' },
   { verb: 'feed', glyph: '∴', hotkey: 'f' },
+  { verb: 'treat', glyph: '✦', hotkey: 't' },
 ] as const
 /** CSS pixels on the remote surfaces: 2 per sprite pixel. */
 const SVG_SCALE = 2
@@ -122,6 +150,7 @@ const STILL: IdlePose = {
 const idlePose = atom({ plugin: 'mochi', key: 'idlePose' } as const, STILL, {
   shape: 'idle-pose-2',
 })
+const emote = atom({ plugin: 'mochi', key: 'emote' } as const, null as string | null)
 
 /** Whether this session's image probe runs, and the picture last drawn, which it blits. */
 type Probe = { isRunning: boolean; shown: Picture | undefined }
@@ -142,8 +171,17 @@ type Life = {
   mood: Mood
   /** What Claude is doing in the main turn, while one runs. */
   work: Work | null
+  trouble: Trouble
+  /** The tone the pet last reacted to in the owner's draft. */
+  draftTone: Tone
+  /** The main loop's tool calls put to the owner, and those that ran, by id. */
+  asked: Set<string>
+  ran: Set<string>
   random: Random | null
   shown: IdlePose | null
+  /** The emote noticed for the spells so far, and the text last written. */
+  emote: EmoteState
+  shownEmote: string | null
 }
 
 export const register: Register = on => {
@@ -156,15 +194,21 @@ export const register: Register = on => {
     petColumns: PET_COLUMNS,
     mood: CALM,
     work: null,
+    trouble: NO_TROUBLE,
+    draftTone: 'neutral',
+    asked: new Set(),
+    ran: new Set(),
     random: null,
     shown: null,
+    emote: NO_EMOTE,
+    shownEmote: null,
   }
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pet',
-      description: 'Adopt, name, feed, pet and check on your pup',
-      argumentHint: 'adopt <name> [coat] | name <name> | feed | pet | status',
+      description: 'Adopt, name, feed, pet, treat and check on your pup',
+      argumentHint: 'adopt <name> [coat] | name <name> | feed | pet | treat | status',
       immediate: true,
     })
     const kept = storedPet(await $.store.get(PET_KEY))
@@ -181,7 +225,8 @@ export const register: Register = on => {
   })
 
   // The pup shows the coat the focus is on, so the owner sees each shade before picking.
-  // The owner typing: the pet comes to watch. Observe only, and never hold up a key.
+  // The owner typing: the pet comes to watch, and reacts to the draft's tone. Observe
+  // only, and never hold up a key.
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
     if (life.run > 0 && box.text !== e.text) {
@@ -191,9 +236,23 @@ export const register: Register = on => {
     return box
   })
 
-  // Claude works: the pet thinks along with the main turn, never a subagent's.
+  // The owner sent a prompt of their own: the pet reacts to its tone. Observe only.
+  on('prompt.submit', async ($, e, next) => {
+    const isOwners = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    if (life.run > 0 && isOwners && e.command === undefined && e.isMeta !== true) {
+      void hearOwner($, life, e.text)
+    }
+
+    return next(e)
+  })
+
+  // Claude works: the pet thinks along with the main turn, never a subagent's, and reacts
+  // to how each of its tool calls ends.
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) await thinkAlong($, life, 'watching')
+    if (e.agentId === undefined) {
+      life.trouble = turnStarted(life.trouble)
+      await thinkAlong($, life, 'watching')
+    }
 
     return next(e)
   })
@@ -202,9 +261,45 @@ export const register: Register = on => {
     if (e.agentId !== undefined) return next(e)
     await thinkAlong($, life, thinkingOf(e.tool))
     const result = await next(e)
+    const end = {
+      wasAsked: life.asked.delete(e.tool_use_id),
+      hasRun: life.ran.delete(e.tool_use_id),
+      isAborted: next.signal.aborted,
+    }
+    const command =
+      e.tool === 'Bash' && typeof e.command === 'string' ? e.command : undefined
+    const outcome = endOf(result, end)
+    await notice($, life, { tool: e.tool, command, outcome })
     await thinkAlong($, life, 'watching')
 
     return result
+  })
+
+  // Observe only: who is asked about a call, never what the answer is.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    const id = e.tool_use_id
+    if (e.agentId === undefined && id !== undefined && e.approver === 'person') {
+      if (verdict.decision === 'ask') life.asked.add(id)
+      else life.asked.delete(id)
+    }
+
+    return verdict
+  })
+
+  // In auto mode the classifier answers an ask before the owner is put to it.
+  on('tool.judge', async ($, e, next) => {
+    const verdict = await next(e)
+    if (verdict.decision !== 'ask') life.asked.delete(e.tool_use_id)
+
+    return verdict
+  })
+
+  // Only an allowed call runs: one that never did was refused.
+  on('tool.run', async ($, e, next) => {
+    if (e.agentId === undefined) life.ran.add(e.tool_use_id)
+
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -219,6 +314,7 @@ export const register: Register = on => {
 
   // The owner sent or cleared the prompt: nothing left to watch.
   on('prompt.change', async ($, e, next) => {
+    if (e.text === '') life.draftTone = 'neutral'
     if (life.run > 0 && e.text === '' && life.spell !== null) {
       life.spell = wanderOff(life.spell, await $.clock.now())
       restart($, life)
@@ -258,17 +354,39 @@ export const register: Register = on => {
         CONTROLS_COLUMNS
       const pup = await drawPicture($, e, probe, idlePicture(adopted, pose))
       const bowl = pose.hasEmptyBowl ? await drawPicture($, e, probe, BOWL_PICTURE) : null
-      // The bowl sits in front of the pup's nose; the care controls follow the pup.
+      // The emote stands beside the pet, on its left when the band has no room right.
+      const said = await read($, emote)
+      const x = Math.max(0, Math.min(pose.x, life.room))
+      const saidColumns = said === null ? 0 : said.length + 1
+      const isSaidLeft = said !== null && x + saidColumns > life.room
+      const saying =
+        said === null ? null : (
+          <Box
+            key="pet:emote"
+            marginLeft={isSaidLeft ? 0 : 1}
+            marginRight={isSaidLeft ? 1 : 0}
+          >
+            <Text dimColor>{said}</Text>
+          </Box>
+        )
+      // The bowl sits in front of the pup's nose. The pet's spot takes the band's width,
+      // so the care controls stay put at its right edge while the pet walks about.
       return (
-        <Box
-          flexDirection="row"
-          alignItems="center"
-          marginLeft={Math.max(0, Math.min(pose.x, life.room))}
-        >
-          {pose.facing === 'left' && bowl}
-          {pup}
-          {pose.facing === 'right' && bowl}
-          <Box flexDirection="row" columnGap={1} marginLeft={1}>
+        <Box flexDirection="row" alignItems="center">
+          <Box
+            key="pet:spot"
+            flexDirection="row"
+            alignItems="center"
+            flexGrow={1}
+            marginLeft={isSaidLeft ? Math.max(0, x - saidColumns) : x}
+          >
+            {isSaidLeft && saying}
+            {pose.facing === 'left' && bowl}
+            {pup}
+            {pose.facing === 'right' && bowl}
+            {!isSaidLeft && saying}
+          </Box>
+          <Box key="care" flexDirection="column" alignItems="flex-end">
             {CONTROLS.map(({ verb, glyph, hotkey }) => (
               <Button
                 key={`care:${verb}`}
@@ -447,9 +565,10 @@ async function runCommand($: EngineInterface, life: Life, args: string): Promise
   // Read the store, not this session's copy: another session may have changed the pet.
   const current = storedPet(await $.store.get(PET_KEY))
   const needs = storedNeeds(await $.store.get(NEEDS_KEY))
+  const treats = storedTreats(await $.store.get(TREATS_KEY))
   await update($, pet, () => current)
   const now = await $.clock.now()
-  const outcome = petCommand(args, { pet: current, needs }, now)
+  const outcome = petCommand(args, { pet: current, needs, treats }, now)
 
   if (outcome.kind === 'adopted') {
     await $.store.set(NEEDS_KEY, outcome.needs)
@@ -464,6 +583,13 @@ async function runCommand($: EngineInterface, life: Life, args: string): Promise
       life.spell,
       now,
     )
+    restart($, life)
+  } else if (outcome.kind === 'treated') {
+    await $.store.set(NEEDS_KEY, outcome.needs)
+    await $.store.set(TREATS_KEY, outcome.treats)
+    life.mood = moodOf(outcome.needs)
+    life.random ??= seededRandom(now)
+    life.spell = treatSpell(life.spell, now, life.random)
     restart($, life)
   } else if (outcome.kind === 'pickCoat') {
     await update($, coatPick, () => ({ name: outcome.name, coat: COATS[0]! }))
@@ -489,7 +615,51 @@ async function thinkAlong($: EngineInterface, life: Life, thinking: Thinking) {
   }
 }
 
-/** The pet comes to sit over the owner's caret and watch them type (ADR-0005). */
+/**
+ * How a tool call ended. A call that never ran was refused, by the owner if they were
+ * asked; the refusal can read as an error result, so the result alone cannot tell.
+ */
+function endOf(
+  result: ToolCallResult,
+  end: { wasAsked: boolean; hasRun: boolean; isAborted: boolean },
+): ToolCallEnd['outcome'] {
+  if (end.isAborted) return 'interrupted'
+  if (!end.hasRun) return end.wasAsked ? 'refusedByOwner' : 'refused'
+  if (result.isError === true || result.deny !== undefined) return 'error'
+  return 'answered'
+}
+
+/**
+ * A tool call of the main turn ended: trouble worries the pet and makes it a little less
+ * happy, a win makes it celebrate, happier, and earns a treat, and the owner refusing a
+ * permission makes it tilt its head. Never fails the tool call it was raised from.
+ */
+async function notice($: EngineInterface, life: Life, call: ToolCallEnd) {
+  if (life.run === 0) return
+  try {
+    const noticed = noticeToolCall(life.trouble, call)
+    life.trouble = noticed.trouble
+    if (noticed.reaction === null) return
+    const now = await $.clock.now()
+    if (noticed.reaction === 'worried' || noticed.isWin) {
+      const change = noticed.isWin ? won : troubled
+      life.mood = moodOf(await settleNeeds($, now, false, change))
+    }
+    if (noticed.isWin) {
+      const treats = storedTreats(await $.store.get(TREATS_KEY))
+      await $.store.set(TREATS_KEY, treats + 1)
+    }
+    life.spell = reactionSpell(noticed.reaction, life.spell, now, life.trouble.thisTurn)
+    restart($, life)
+  } catch {
+    // The pet missing a beat is fine; Claude's work going on is what matters.
+  }
+}
+
+/**
+ * The pet comes to sit over the owner's caret and watch them type, and reacts when the
+ * draft turns happy, angry or sad (ADR-0005).
+ */
 async function watchOwner(
   $: EngineInterface,
   life: Life,
@@ -497,11 +667,36 @@ async function watchOwner(
   cursor: number,
   isQuestion: boolean,
 ) {
+  const now = await $.clock.now()
+  const toX = caretX(life, text, cursor)
+  const draft = draftTone(life.draftTone, text)
+  life.draftTone = draft.tone
+  life.spell = draft.isNew
+    ? toneSpell(draft.tone, life.spell, now, toX, life.room, life.mood)
+    : curiousSpell(life.spell, now, toX, isQuestion)
+  restart($, life)
+}
+
+/** The owner sent `text`: the pet reacts to its tone. Never fails the prompt. */
+async function hearOwner($: EngineInterface, life: Life, text: string) {
+  try {
+    life.draftTone = 'neutral'
+    const tone = toneOf(text)
+    if (tone === 'neutral') return
+    const now = await $.clock.now()
+    const toX = caretX(life, text, text.length)
+    life.spell = toneSpell(tone, life.spell, now, toX, life.room, life.mood)
+    restart($, life)
+  } catch {
+    // The pet missing a beat is fine; the owner's prompt going in is what matters.
+  }
+}
+
+/** The column the pet sits at, centred over the owner's caret, kept in the band. */
+function caretX(life: Life, text: string, cursor: number): number {
   const line = text.slice(0, cursor).split('\n').at(-1) ?? ''
   const caret = (PROMPT_INDENT + line.length) % Math.max(1, life.bandColumns)
-  const toX = Math.max(0, Math.min(caret - life.petColumns / 2, life.room))
-  life.spell = curiousSpell(life.spell, await $.clock.now(), Math.round(toX), isQuestion)
-  restart($, life)
+  return Math.round(Math.max(0, Math.min(caret - life.petColumns / 2, life.room)))
 }
 
 /** Keeps the pet in the store for every session, and in this one's band. */
@@ -548,19 +743,32 @@ async function tick($: EngineInterface, life: Life, run: number) {
       await update($, idlePose, () => pose)
       life.shown = pose
     }
-    $.clock.after(Math.max(1, nextAt - now), () => tick($, life, run))
+    life.emote = noticeSpell(life.emote, life.spell, now)
+    const said = emoteAt(life.emote, now)
+    if (said !== life.shownEmote) {
+      await update($, emote, () => said)
+      life.shownEmote = said
+    }
+    // A showing emote wakes the loop when it fades, even while the pet holds still.
+    const wakeAt = said === null ? nextAt : Math.min(nextAt, life.emote.fadesAt)
+    $.clock.after(Math.max(1, wakeAt - now), () => tick($, life, run))
   } catch {
     if (run === life.run) life.run = 0
   }
 }
 
 /**
- * Brings the needs in the store up to now and keeps them. A pet adopted before it had
- * needs starts full and rested.
+ * Brings the needs in the store up to now, makes any `change` and keeps them. A pet
+ * adopted before it had needs starts full and rested.
  */
-async function settleNeeds($: EngineInterface, now: number, wasAsleep: boolean) {
+async function settleNeeds(
+  $: EngineInterface,
+  now: number,
+  wasAsleep: boolean,
+  change: (needs: Needs) => Needs = needs => needs,
+) {
   const kept = storedNeeds(await $.store.get(NEEDS_KEY)) ?? freshNeeds(now)
-  const needs = passTime(kept, now, wasAsleep)
+  const needs = change(passTime(kept, now, wasAsleep))
   await $.store.set(NEEDS_KEY, needs)
   return needs
 }

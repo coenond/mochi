@@ -5,6 +5,7 @@ import type {
   PromptChangeInput,
   PromptEditInput,
   PromptEditResult,
+  PromptSubmitInput,
   TurnCompleteInput,
   TurnStartInput,
   UiFocusInput,
@@ -264,7 +265,7 @@ async function watchBand($: Engine, on: On, ms: number, bodyColumns = 80) {
   })
   const seen: { x: number; source: string }[] = []
   for (let t = 0; t < ms; t += 160) {
-    const box = await ui.find({ type: 'Box' })
+    const box = await ui.find({ key: 'pet:spot' })
     const pet = await ui.find({ type: 'Svg' })
     seen.push({
       x: Number(box?.props.marginLeft ?? 0),
@@ -409,7 +410,48 @@ test('/pet pet makes the pet happier, and it is petted', async ($, on) => {
   await ui.unmount()
 })
 
-test('the band has dim ♥ and ∴ controls on hotkeys p and f (ADR-0008)', async ($, on) => {
+const TRICK_SVGS = (['spin', 'rollOver', 'playBow', 'hop'] as const).flatMap(trick =>
+  PET_FRAMES[trick].flatMap((_, i) => svgsOf(trick, i)),
+)
+
+test('/pet treat gives a saved treat: much happier, and a trick', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { happiness: 50 }),
+    treats: 2,
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  const { text } = await runPet($, 'treat')
+  await clock.advance(1)
+
+  expect(text).toBe('Mochi gobbles the treat and does a trick.')
+  expect(store.get('needs')).toMatchObject({ happiness: 80 })
+  expect(store.get('treats')).toBe(1)
+  expect(TRICK_SVGS).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('with no treats saved, nothing is given', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { happiness: 50 }),
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const before = await petSource(ui)
+
+  const { text } = await runPet($, 'treat')
+  await clock.advance(1)
+
+  expect(text).toBe('No treats saved. Mochi earns them with wins.')
+  expect(store.get('needs')).toMatchObject({ happiness: 50 })
+  expect(await petSource(ui)).toBe(before)
+  await ui.unmount()
+})
+
+test('the band has dim ♥, ∴ and ✦ controls on hotkeys p, f and t (ADR-0008)', async ($, on) => {
   const clock = mock.clock(on)
   await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
 
@@ -420,25 +462,46 @@ test('the band has dim ♥ and ∴ controls on hotkeys p and f (ADR-0008)', asyn
     expect(controls.map(one => [one.props.label, one.props.hotkey])).toEqual([
       ['♥', 'p'],
       ['∴', 'f'],
+      ['✦', 't'],
     ])
     expect(controls.every(one => one.props.dimColor === true)).toBe(true)
     await ui.unmount()
   }
 })
 
-test('pressing a control pets or feeds without a word', async ($, on) => {
+test('the controls stand in a column at the right edge, wherever the pet is', async ($, on) => {
+  const clock = mock.clock(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const controls = await ui.find({ key: 'care' })
+    const spot = await ui.find({ key: 'pet:spot' })
+
+    expect(controls?.props).toMatchObject({ flexDirection: 'column' })
+    expect(controls?.props.marginLeft).toBeUndefined()
+    // The pet's spot takes the band's width, which pushes the controls to its edge.
+    expect(spot?.props.flexGrow).toBe(1)
+    await ui.unmount()
+  }
+})
+
+test('pressing a control pets, feeds or gives a treat without a word', async ($, on) => {
   const clock = mock.clock(on)
   const appended = mock.session(on)
   const store = await startSession($, on, {
     pet: MOCHI,
     needs: needs(clock.now(), { hunger: 20, happiness: 50 }),
+    treats: 1,
   })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
 
   await ui.press({ key: 'care:pet' })
   await ui.press({ key: 'care:feed' })
+  await ui.press({ key: 'care:treat' })
 
-  expect(store.get('needs')).toMatchObject({ hunger: 50, happiness: 60 })
+  expect(store.get('needs')).toMatchObject({ hunger: 50, happiness: 90 })
+  expect(store.get('treats')).toBe(0)
   expect(appended.appended()).toEqual([])
   await ui.unmount()
 })
@@ -475,6 +538,7 @@ function promptEvents($: Engine) {
   return $.prompt as unknown as {
     edit: (e: PromptEditInput) => Promise<PromptEditResult>
     change: (e: PromptChangeInput) => Promise<unknown>
+    submit: (e: PromptSubmitInput) => Promise<unknown>
   }
 }
 
@@ -507,7 +571,7 @@ test('when the owner types, the pet trots over and sits watching', async ($, on)
 
   expect(curiousSvgs(0)).toContain(await petSource(ui))
   // The caret is at column 2 + 11; the 8-column pup sits centred over it.
-  expect((await ui.find({ type: 'Box' }))?.props.marginLeft).toBe(9)
+  expect((await ui.find({ key: 'pet:spot' }))?.props.marginLeft).toBe(9)
   await ui.unmount()
 })
 
@@ -694,5 +758,276 @@ test('the owner typing while Claude works brings the pet over to watch', async (
   await clock.advance(20 * 160)
 
   expect(curiousSvgs(0)).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+/** Every frame of `behaviour` as the desktop app draws them, facing either way. */
+function allSvgsOf(behaviour: keyof typeof PET_FRAMES): string[] {
+  return PET_FRAMES[behaviour].flatMap((_, i) => svgsOf(behaviour, i))
+}
+
+/** A tool's answer as it runs: answered, or failing. */
+type Answer = { result: unknown } | { deny: string }
+
+const ANSWERED: Answer = { result: { stdout: 'ok', stderr: '', interrupted: false } }
+const FAILED: Answer = { deny: 'exit code 1' }
+const REFUSED_ID = 'refused'
+
+/**
+ * A main turn running on the desktop app, its tools answering `answers` in order. Every
+ * call is allowed but `REFUSED_ID`, which is refused, by the owner if they were asked.
+ * The store comes back as a map to read.
+ */
+async function turnWithAnswers(
+  $: Engine,
+  on: On,
+  answers: Answer[],
+  stored: Record<string, unknown> = {},
+) {
+  const clock = mock.clock(on)
+  on('turn.start', () => ({ turnId: 't1' }))
+  on('tool.run', () => answers.shift() ?? ANSWERED)
+  // The check the owner is put to asks; the call's own is refused when theirs was.
+  on('tool.check', (_, e) => {
+    if (e.approver === 'person') return { decision: 'ask' }
+    return { decision: e.tool_use_id === REFUSED_ID ? 'deny' : 'allow' }
+  })
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { happiness: 50 }),
+    ...stored,
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await turnEvents($).start({ text: 'go', turnId: 't1' })
+  return { clock, store, ui }
+}
+
+/** Claude running `command` in Bash. */
+function bash($: Engine, command: string, id = 'b1') {
+  return $.tool.call({ tool: 'Bash', command, tool_use_id: id } as never)
+}
+
+test('a failing tool call makes the pet worried, and a little less happy', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [FAILED])
+
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as never)
+  await clock.advance(1)
+
+  expect(allSvgsOf('worried')).toContain(await petSource(ui))
+  expect(store.get('needs')).toMatchObject({ happiness: 45 })
+  await ui.unmount()
+})
+
+test('the worry lasts about five seconds, then it thinks along again', async ($, on) => {
+  const { clock, ui } = await turnWithAnswers($, on, [FAILED])
+
+  await bash($, 'ls')
+  await clock.advance(5100)
+
+  expect(allSvgsOf('watching')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('more trouble in the same turn keeps it worried for longer', async ($, on) => {
+  const { clock, ui } = await turnWithAnswers($, on, [FAILED, FAILED])
+
+  await bash($, 'pnpm test', 'b1')
+  await bash($, 'pnpm test', 'b2')
+  await clock.advance(5100)
+
+  expect(allSvgsOf('worried')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a test passing after trouble is a win: it celebrates and earns a treat', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [FAILED, ANSWERED])
+
+  await bash($, 'pnpm test', 'b1')
+  await bash($, 'pnpm test', 'b2')
+  await clock.advance(1)
+
+  expect(allSvgsOf('celebrating')).toContain(await petSource(ui))
+  expect(store.get('treats')).toBe(1)
+  expect(store.get('needs')).toMatchObject({ happiness: 60 })
+  expect(await runPet($, 'status')).toMatchObject({
+    text: expect.stringContaining('Treats saved: 1.'),
+  })
+  await ui.unmount()
+})
+
+test('a test passing with no trouble before earns nothing', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [ANSWERED])
+
+  await bash($, 'pnpm build')
+  await clock.advance(1)
+
+  expect(allSvgsOf('celebrating')).not.toContain(await petSource(ui))
+  expect(store.get('treats')).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the owner refusing a permission makes it tilt its head', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [])
+  const check = ($.tool as unknown as { check: (e: unknown) => Promise<unknown> }).check
+
+  // The check the engine raises for Claude's call, before it asks the owner.
+  await check({
+    tool: 'Bash',
+    input: { command: 'rm x' },
+    tool_use_id: REFUSED_ID,
+    approver: 'person',
+  })
+  await bash($, 'rm x', REFUSED_ID)
+  await clock.advance(1)
+
+  expect(allSvgsOf('confused')).toContain(await petSource(ui))
+  expect(store.get('needs')).toMatchObject({ happiness: 50 })
+  await ui.unmount()
+})
+
+test('a call refused with nobody asked goes by unnoticed', async ($, on) => {
+  const { clock, ui } = await turnWithAnswers($, on, [])
+
+  await bash($, 'rm x', REFUSED_ID)
+  await clock.advance(1)
+
+  expect(allSvgsOf('watching')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+/** Stands in for the engine beneath the mod: a sent prompt goes in as it is. */
+function sends(on: On) {
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+}
+
+/** The owner pressing Enter on `text`, or on a slash command. */
+function send($: Engine, text: string, command?: { name: string; args: string }) {
+  return promptEvents($).submit({
+    text,
+    command,
+    wait: false,
+    origin: { kind: 'composer' },
+  })
+}
+
+test('a happy draft makes it wag', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'thank', 's')
+  await clock.advance(1)
+
+  expect(allSvgsOf('wagging')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('an angry draft makes it shrink back', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'wt', 'f')
+  await clock.advance(1)
+
+  expect(allSvgsOf('shrinkingBack')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a sad draft brings it close to lie down by the caret', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'i give u', 'p')
+  await clock.advance(20 * 160)
+
+  expect(svgsOf('lieDown')).toContain(await petSource(ui))
+  // The caret is at column 2 + 9; the 8-column pup lies centred over it.
+  expect((await ui.find({ key: 'pet:spot' }))?.props.marginLeft).toBe(7)
+  await ui.unmount()
+})
+
+test('a neutral draft only brings it over to watch', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'add a tes', 't')
+  await clock.advance(20 * 160)
+
+  expect(curiousSvgs(0)).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a happy prompt sent makes it wag before it thinks along (ADR-0005)', async ($, on) => {
+  sends(on)
+  const { clock, ui } = await startTurn($, on)
+
+  await send($, 'great, thanks')
+  await turnEvents($).start({ text: 'great, thanks', turnId: 't1' })
+  await clock.advance(1)
+
+  expect(allSvgsOf('wagging')).toContain(await petSource(ui))
+  await clock.advance(6000)
+  expect(allSvgsOf('wagging')).not.toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a slash command sent is not read for tone', async ($, on) => {
+  const clock = mock.clock(on)
+  sends(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const before = await petSource(ui)
+
+  await send($, '/pet name Awesome', { name: 'pet', args: 'name Awesome' })
+  await clock.advance(1)
+
+  expect(await petSource(ui)).toBe(before)
+  await ui.unmount()
+})
+
+test('petting cuts a wag short (ADR-0005)', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await type($, 'thank', 's')
+
+  await runPet($, 'pet')
+
+  expect(allSvgsOf('beingPetted')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a happy draft shows a dim *woof woof* beside the pet', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'thank', 's')
+  await clock.advance(1)
+
+  const said = await ui.find({ type: 'Text', text: '*woof woof*' })
+  expect(said?.props.dimColor).toBe(true)
+  await ui.unmount()
+})
+
+test('the emote fades after a few seconds', async ($, on) => {
+  const clock = mock.clock(on)
+  editor(on)
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await type($, 'thank', 's')
+  await clock.advance(5000)
+
+  expect(await ui.find({ key: 'pet:emote' })).toBeUndefined()
   await ui.unmount()
 })
