@@ -20,6 +20,9 @@ export type Behaviour =
   | 'watching'
   | 'carrying'
   | 'waiting'
+  | 'worried'
+  | 'celebrating'
+  | 'confused'
 
 /**
  * What the band draws of the pet's life: a frame of a behaviour, where, facing which way,

@@ -1,10 +1,17 @@
 // The engine shell (ADR-0005): turns the core's sprites into what each surface draws in
 // the band, the owner's `/pet` commands and coat pick into a kept pet and needs, the
-// owner's typing into curiosity, Claude's turns and tool calls into thinking, and the
-// clock into the pet's life. No pet logic lives here.
+// owner's typing into curiosity, Claude's turns and tool calls into thinking, how those
+// calls end into trouble, wins and confusion, and the clock into the pet's life. No pet
+// logic lives here.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderInput, UiBlitResult } from 'claude-code'
+import type {
+  EngineInterface,
+  Register,
+  RenderInput,
+  ToolCallResult,
+  UiBlitResult,
+} from 'claude-code'
 
 import type { CoatPick, IdlePose, TerminalDrawsImages } from '../types'
 import { storedPet, type Pet } from '../src/core/adoption'
@@ -17,6 +24,7 @@ import {
   doneWorking,
   nextSpell,
   poseAt,
+  reactionSpell,
   seededRandom,
   spellEndsAt,
   thinkingOf,
@@ -34,6 +42,8 @@ import {
   isTired,
   passTime,
   storedNeeds,
+  troubled,
+  won,
   type Needs,
 } from '../src/core/needs'
 import {
@@ -46,6 +56,14 @@ import {
   PET_FRAMES,
   PET_SIT,
 } from '../src/core/sheet'
+import {
+  NO_TROUBLE,
+  noticeToolCall,
+  storedTreats,
+  turnStarted,
+  type ToolCallEnd,
+  type Trouble,
+} from '../src/core/trouble'
 import {
   COATS,
   mirror,
@@ -60,6 +78,7 @@ import {
 /** The pet's keys in the cross-session store, shared by every project and session. */
 const PET_KEY = 'pet'
 const NEEDS_KEY = 'needs'
+const TREATS_KEY = 'treats'
 
 /** The band is 3 text rows; a picture 24 pixels tall fills them at 4 pixels a column. */
 const BAND_ROWS = 3
@@ -142,6 +161,10 @@ type Life = {
   mood: Mood
   /** What Claude is doing in the main turn, while one runs. */
   work: Work | null
+  trouble: Trouble
+  /** The main loop's tool calls put to the owner, and those that ran, by id. */
+  asked: Set<string>
+  ran: Set<string>
   random: Random | null
   shown: IdlePose | null
 }
@@ -156,6 +179,9 @@ export const register: Register = on => {
     petColumns: PET_COLUMNS,
     mood: CALM,
     work: null,
+    trouble: NO_TROUBLE,
+    asked: new Set(),
+    ran: new Set(),
     random: null,
     shown: null,
   }
@@ -191,9 +217,13 @@ export const register: Register = on => {
     return box
   })
 
-  // Claude works: the pet thinks along with the main turn, never a subagent's.
+  // Claude works: the pet thinks along with the main turn, never a subagent's, and reacts
+  // to how each of its tool calls ends.
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) await thinkAlong($, life, 'watching')
+    if (e.agentId === undefined) {
+      life.trouble = turnStarted(life.trouble)
+      await thinkAlong($, life, 'watching')
+    }
 
     return next(e)
   })
@@ -202,9 +232,45 @@ export const register: Register = on => {
     if (e.agentId !== undefined) return next(e)
     await thinkAlong($, life, thinkingOf(e.tool))
     const result = await next(e)
+    const end = {
+      wasAsked: life.asked.delete(e.tool_use_id),
+      hasRun: life.ran.delete(e.tool_use_id),
+      isAborted: next.signal.aborted,
+    }
+    const command =
+      e.tool === 'Bash' && typeof e.command === 'string' ? e.command : undefined
+    const outcome = endOf(result, end)
+    await notice($, life, { tool: e.tool, command, outcome })
     await thinkAlong($, life, 'watching')
 
     return result
+  })
+
+  // Observe only: who is asked about a call, never what the answer is.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    const id = e.tool_use_id
+    if (e.agentId === undefined && id !== undefined && e.approver === 'person') {
+      if (verdict.decision === 'ask') life.asked.add(id)
+      else life.asked.delete(id)
+    }
+
+    return verdict
+  })
+
+  // In auto mode the classifier answers an ask before the owner is put to it.
+  on('tool.judge', async ($, e, next) => {
+    const verdict = await next(e)
+    if (verdict.decision !== 'ask') life.asked.delete(e.tool_use_id)
+
+    return verdict
+  })
+
+  // Only an allowed call runs: one that never did was refused.
+  on('tool.run', async ($, e, next) => {
+    if (e.agentId === undefined) life.ran.add(e.tool_use_id)
+
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -447,9 +513,10 @@ async function runCommand($: EngineInterface, life: Life, args: string): Promise
   // Read the store, not this session's copy: another session may have changed the pet.
   const current = storedPet(await $.store.get(PET_KEY))
   const needs = storedNeeds(await $.store.get(NEEDS_KEY))
+  const treats = storedTreats(await $.store.get(TREATS_KEY))
   await update($, pet, () => current)
   const now = await $.clock.now()
-  const outcome = petCommand(args, { pet: current, needs }, now)
+  const outcome = petCommand(args, { pet: current, needs, treats }, now)
 
   if (outcome.kind === 'adopted') {
     await $.store.set(NEEDS_KEY, outcome.needs)
@@ -483,6 +550,47 @@ async function thinkAlong($: EngineInterface, life: Life, thinking: Thinking) {
     life.work = { thinking, since: now }
     life.random ??= seededRandom(now)
     life.spell = workSpell(life.spell, now, life.work, life.room, life.random)
+    restart($, life)
+  } catch {
+    // The pet missing a beat is fine; Claude's work going on is what matters.
+  }
+}
+
+/**
+ * How a tool call ended. A call that never ran was refused, by the owner if they were
+ * asked; the refusal can read as an error result, so the result alone cannot tell.
+ */
+function endOf(
+  result: ToolCallResult,
+  end: { wasAsked: boolean; hasRun: boolean; isAborted: boolean },
+): ToolCallEnd['outcome'] {
+  if (end.isAborted) return 'interrupted'
+  if (!end.hasRun) return end.wasAsked ? 'refusedByOwner' : 'refused'
+  if (result.isError === true || result.deny !== undefined) return 'error'
+  return 'answered'
+}
+
+/**
+ * A tool call of the main turn ended: trouble worries the pet and makes it a little less
+ * happy, a win makes it celebrate, happier, and earns a treat, and the owner refusing a
+ * permission makes it tilt its head. Never fails the tool call it was raised from.
+ */
+async function notice($: EngineInterface, life: Life, call: ToolCallEnd) {
+  if (life.run === 0) return
+  try {
+    const noticed = noticeToolCall(life.trouble, call)
+    life.trouble = noticed.trouble
+    if (noticed.reaction === null) return
+    const now = await $.clock.now()
+    if (noticed.reaction === 'worried' || noticed.isWin) {
+      const change = noticed.isWin ? won : troubled
+      life.mood = moodOf(await settleNeeds($, now, false, change))
+    }
+    if (noticed.isWin) {
+      const treats = storedTreats(await $.store.get(TREATS_KEY))
+      await $.store.set(TREATS_KEY, treats + 1)
+    }
+    life.spell = reactionSpell(noticed.reaction, life.spell, now, life.trouble.thisTurn)
     restart($, life)
   } catch {
     // The pet missing a beat is fine; Claude's work going on is what matters.
@@ -555,12 +663,17 @@ async function tick($: EngineInterface, life: Life, run: number) {
 }
 
 /**
- * Brings the needs in the store up to now and keeps them. A pet adopted before it had
- * needs starts full and rested.
+ * Brings the needs in the store up to now, makes any `change` and keeps them. A pet
+ * adopted before it had needs starts full and rested.
  */
-async function settleNeeds($: EngineInterface, now: number, wasAsleep: boolean) {
+async function settleNeeds(
+  $: EngineInterface,
+  now: number,
+  wasAsleep: boolean,
+  change: (needs: Needs) => Needs = needs => needs,
+) {
   const kept = storedNeeds(await $.store.get(NEEDS_KEY)) ?? freshNeeds(now)
-  const needs = passTime(kept, now, wasAsleep)
+  const needs = change(passTime(kept, now, wasAsleep))
   await $.store.set(NEEDS_KEY, needs)
   return needs
 }

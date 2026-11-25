@@ -4,7 +4,12 @@ import { adopt, NO_PET_YET, rename, type AdoptionOutcome, type Pet } from './ado
 import { feed, freshNeeds, passTime, petting, type Needs } from './needs'
 
 /** What the store holds of the one pet: `null` for what is not there yet. */
-export type Home = { pet: Pet | null; needs: Needs | null }
+export type Home = {
+  pet: Pet | null
+  needs: Needs | null
+  /** Treats earned with wins and not given yet; none when left out. */
+  treats?: number
+}
 
 export type PetCommandOutcome =
   | AdoptionOutcome
@@ -25,7 +30,7 @@ export function petCommand(args: string, home: Home, now: number): PetCommandOut
   // A pet adopted before it had needs is taken to be full and rested.
   const needs = passTime(home.needs ?? freshNeeds(now), now, false)
 
-  if (verb === 'status') return reply(status(pet, needs))
+  if (verb === 'status') return reply(status(pet, needs, home.treats ?? 0))
   if (verb === 'pet') {
     return {
       kind: 'petted',
@@ -43,10 +48,13 @@ export function petCommand(args: string, home: Home, now: number): PetCommandOut
   }
 }
 
-function status({ name, coat }: Pet, { hunger, happiness, energy }: Needs): string {
+function status(
+  { name, coat }: Pet,
+  { hunger, happiness, energy }: Needs,
+  treats: number,
+): string {
   const [h, p, e] = [hunger, happiness, energy].map(Math.round)
-  // Treats come with ticket #10; until then there are none to save.
-  return `${name}, ${coat} coat. Hunger ${h}, happiness ${p}, energy ${e}. Treats saved: 0.`
+  return `${name}, ${coat} coat. Hunger ${h}, happiness ${p}, energy ${e}. Treats saved: ${treats}.`
 }
 
 /** The owner's words, control characters dropped, split on any run of spaces. */

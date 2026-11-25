@@ -696,3 +696,137 @@ test('the owner typing while Claude works brings the pet over to watch', async (
   expect(curiousSvgs(0)).toContain(await petSource(ui))
   await ui.unmount()
 })
+
+/** Every frame of `behaviour` as the desktop app draws them, facing either way. */
+function allSvgsOf(behaviour: keyof typeof PET_FRAMES): string[] {
+  return PET_FRAMES[behaviour].flatMap((_, i) => svgsOf(behaviour, i))
+}
+
+/** A tool's answer as it runs: answered, or failing. */
+type Answer = { result: unknown } | { deny: string }
+
+const ANSWERED: Answer = { result: { stdout: 'ok', stderr: '', interrupted: false } }
+const FAILED: Answer = { deny: 'exit code 1' }
+const REFUSED_ID = 'refused'
+
+/**
+ * A main turn running on the desktop app, its tools answering `answers` in order. Every
+ * call is allowed but `REFUSED_ID`, which is refused, by the owner if they were asked.
+ * The store comes back as a map to read.
+ */
+async function turnWithAnswers(
+  $: Engine,
+  on: On,
+  answers: Answer[],
+  stored: Record<string, unknown> = {},
+) {
+  const clock = mock.clock(on)
+  on('turn.start', () => ({ turnId: 't1' }))
+  on('tool.run', () => answers.shift() ?? ANSWERED)
+  // The check the owner is put to asks; the call's own is refused when theirs was.
+  on('tool.check', (_, e) => {
+    if (e.approver === 'person') return { decision: 'ask' }
+    return { decision: e.tool_use_id === REFUSED_ID ? 'deny' : 'allow' }
+  })
+  const store = await startSession($, on, {
+    pet: MOCHI,
+    needs: needs(clock.now(), { happiness: 50 }),
+    ...stored,
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await turnEvents($).start({ text: 'go', turnId: 't1' })
+  return { clock, store, ui }
+}
+
+/** Claude running `command` in Bash. */
+function bash($: Engine, command: string, id = 'b1') {
+  return $.tool.call({ tool: 'Bash', command, tool_use_id: id } as never)
+}
+
+test('a failing tool call makes the pet worried, and a little less happy', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [FAILED])
+
+  await $.tool.call({ tool: 'Read', file_path: '/x' } as never)
+  await clock.advance(1)
+
+  expect(allSvgsOf('worried')).toContain(await petSource(ui))
+  expect(store.get('needs')).toMatchObject({ happiness: 45 })
+  await ui.unmount()
+})
+
+test('the worry lasts about five seconds, then it thinks along again', async ($, on) => {
+  const { clock, ui } = await turnWithAnswers($, on, [FAILED])
+
+  await bash($, 'ls')
+  await clock.advance(5100)
+
+  expect(allSvgsOf('watching')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('more trouble in the same turn keeps it worried for longer', async ($, on) => {
+  const { clock, ui } = await turnWithAnswers($, on, [FAILED, FAILED])
+
+  await bash($, 'pnpm test', 'b1')
+  await bash($, 'pnpm test', 'b2')
+  await clock.advance(5100)
+
+  expect(allSvgsOf('worried')).toContain(await petSource(ui))
+  await ui.unmount()
+})
+
+test('a test passing after trouble is a win: it celebrates and earns a treat', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [FAILED, ANSWERED])
+
+  await bash($, 'pnpm test', 'b1')
+  await bash($, 'pnpm test', 'b2')
+  await clock.advance(1)
+
+  expect(allSvgsOf('celebrating')).toContain(await petSource(ui))
+  expect(store.get('treats')).toBe(1)
+  expect(store.get('needs')).toMatchObject({ happiness: 60 })
+  expect(await runPet($, 'status')).toMatchObject({
+    text: expect.stringContaining('Treats saved: 1.'),
+  })
+  await ui.unmount()
+})
+
+test('a test passing with no trouble before earns nothing', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [ANSWERED])
+
+  await bash($, 'pnpm build')
+  await clock.advance(1)
+
+  expect(allSvgsOf('celebrating')).not.toContain(await petSource(ui))
+  expect(store.get('treats')).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the owner refusing a permission makes it tilt its head', async ($, on) => {
+  const { clock, store, ui } = await turnWithAnswers($, on, [])
+  const check = ($.tool as unknown as { check: (e: unknown) => Promise<unknown> }).check
+
+  // The check the engine raises for Claude's call, before it asks the owner.
+  await check({
+    tool: 'Bash',
+    input: { command: 'rm x' },
+    tool_use_id: REFUSED_ID,
+    approver: 'person',
+  })
+  await bash($, 'rm x', REFUSED_ID)
+  await clock.advance(1)
+
+  expect(allSvgsOf('confused')).toContain(await petSource(ui))
+  expect(store.get('needs')).toMatchObject({ happiness: 50 })
+  await ui.unmount()
+})
+
+test('a call refused with nobody asked goes by unnoticed', async ($, on) => {
+  const { clock, ui } = await turnWithAnswers($, on, [])
+
+  await bash($, 'rm x', REFUSED_ID)
+  await clock.advance(1)
+
+  expect(allSvgsOf('watching')).toContain(await petSource(ui))
+  await ui.unmount()
+})

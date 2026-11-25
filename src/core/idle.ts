@@ -1,8 +1,9 @@
 // Idle life: which idle behaviour the pet chooses on its own, where it walks in the band,
 // and which frame shows when. Pure: time, the band's room, the pet's mood and a random
 // source come in. Reactions play as spells of their own, cutting short what ranks below
-// them (ADR-0005): care (eating, being petted) above all, then curiosity while the owner
-// types, then thinking while Claude works, then idle life.
+// them (ADR-0005): care (eating, being petted) above all, then reactions to trouble, wins
+// and confusion, then curiosity while the owner types, then thinking while Claude works,
+// then idle life.
 //
 // The pet lives one spell after another. A spell plays its behaviour's frames, then
 // holds one still pose with no redraw at all. Holding lasts about four times as long as
@@ -34,7 +35,18 @@ export type Thinking = (typeof THINKING)[number]
 /** What Claude is doing in the turn, and since when. */
 export type Work = { thinking: Thinking; since: number }
 
-export const BEHAVIOURS = [...IDLE_BEHAVIOURS, ...CARE, 'curious', ...THINKING] as const
+/** The reactions to how Claude's work goes: trouble, a win, the owner refusing. */
+export const WORK_REACTIONS = ['worried', 'celebrating', 'confused'] as const
+
+export type WorkReaction = (typeof WORK_REACTIONS)[number]
+
+export const BEHAVIOURS = [
+  ...IDLE_BEHAVIOURS,
+  ...CARE,
+  'curious',
+  ...THINKING,
+  ...WORK_REACTIONS,
+] as const
 
 /** The idle behaviours, and the reactions built so far. */
 export type Behaviour = (typeof BEHAVIOURS)[number]
@@ -91,6 +103,11 @@ export const DOZE_AFTER_MS = 120_000
 const WAIT_HOLD_MS = 10 * 60_000
 /** How far the pet sniffs or carries something about, at most. */
 const MAX_WORK_WALK = 16
+/** How long a reaction to trouble, a win or confusion lasts. */
+export const REACTION_MS = 5000
+/** Each more trouble in the same turn keeps the pet worried this much longer, up to a cap. */
+const MORE_WORRY_MS = 2500
+const MAX_WORRY_MS = 3 * REACTION_MS
 /** A hungry pet walks at about 4 frames a second. */
 const HUNGRY_WALK_FRAME_MS = 240
 const STILL_PER_MOVING = 4
@@ -112,6 +129,9 @@ const PLAY: Readonly<Record<Behaviour, { frameMs: number; passes: number }>> = {
   watching: { frameMs: 700, passes: 1 },
   carrying: { frameMs: MIN_FRAME_MS, passes: 1 },
   waiting: { frameMs: 900, passes: 1 },
+  worried: { frameMs: 600, passes: 2 },
+  celebrating: { frameMs: 120, passes: 4 },
+  confused: { frameMs: 650, passes: 1 },
 }
 
 /** The behaviour whose first frame is held after playing. */
@@ -129,6 +149,9 @@ const HOLD_AS: Readonly<Record<Behaviour, Behaviour>> = {
   watching: 'watching',
   carrying: 'carrying',
   waiting: 'waiting',
+  worried: 'worried',
+  celebrating: 'celebrating',
+  confused: 'confused',
 }
 
 /** How often each is chosen, against the others. */
@@ -206,9 +229,41 @@ export function careSpell(behaviour: Care, previous: Spell | null, now: number):
 }
 
 /**
+ * Claude's work went wrong, came right after trouble, or the owner refused it: the pet
+ * reacts where it is for about five seconds, moving a while and then holding still.
+ * `troubleThisTurn` worries it longer. Care playing is left to finish (ADR-0005); the
+ * rest is cut short, and picks up again after.
+ */
+export function reactionSpell(
+  reaction: WorkReaction,
+  previous: Spell | null,
+  now: number,
+  troubleThisTurn: number,
+): Spell {
+  if (previous !== null && isCaring(previous, now)) return previous
+  const pose = previous === null ? null : poseAt(previous, now)
+  const x = pose?.x ?? 0
+  const more = reaction === 'worried' ? Math.max(0, troubleThisTurn - 1) : 0
+  const lasts = Math.min(MAX_WORRY_MS, REACTION_MS + more * MORE_WORRY_MS)
+  const { frameMs, passes } = PLAY[reaction]
+  const playMs = Math.min(lasts, frameMs * PET_FRAMES[reaction].length * passes)
+  return {
+    behaviour: reaction,
+    startedAt: now,
+    fromX: x,
+    toX: x,
+    facing: pose?.facing ?? 'right',
+    playMs,
+    holdMs: lasts - playMs,
+    isHungry: false,
+  }
+}
+
+/**
  * The owner typed, `toX` the column under their caret. The pet trots over and sits
  * watching the prompt until a while after the last key, tilting its head at a `?`. Care
- * playing is left to finish (ADR-0005); while the pet already watches, it stays put.
+ * and reactions playing are left to finish (ADR-0005); while the pet already watches, it
+ * stays put.
  */
 export function curiousSpell(
   previous: Spell | null,
@@ -216,7 +271,9 @@ export function curiousSpell(
   toX: number,
   isQuestion: boolean,
 ): Spell {
-  if (previous !== null && isCaring(previous, now)) return previous
+  if (previous !== null && (isCaring(previous, now) || isReacting(previous, now))) {
+    return previous
+  }
   if (previous?.behaviour === 'curious') {
     return {
       ...previous,
@@ -260,8 +317,8 @@ export function thinkingOf(tool: string): Thinking {
 /**
  * Claude works: the pet thinks along. Sniffing and carrying walk a little way about,
  * watching sits and holds still, and watching a long while becomes a patient wait, lying
- * down, which dozes off after about two minutes. Care and curiosity playing are left to
- * finish (ADR-0005); the same thinking keeps going until its spell ends.
+ * down, which dozes off after about two minutes. Care, reactions and curiosity playing are
+ * left to finish (ADR-0005); the same thinking keeps going until its spell ends.
  */
 export function workSpell(
   previous: Spell | null,
@@ -309,7 +366,15 @@ export function doneWorking(spell: Spell, now: number): Spell {
 
 function outranksWork(spell: Spell, now: number): boolean {
   return (
-    (isCaring(spell, now) || spell.behaviour === 'curious') && now < spellEndsAt(spell)
+    (isCaring(spell, now) || isReacting(spell, now) || spell.behaviour === 'curious') &&
+    now < spellEndsAt(spell)
+  )
+}
+
+function isReacting(spell: Spell, now: number): boolean {
+  return (
+    (WORK_REACTIONS as readonly string[]).includes(spell.behaviour) &&
+    now < spellEndsAt(spell)
   )
 }
 

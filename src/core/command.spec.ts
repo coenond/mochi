@@ -170,6 +170,14 @@ describe('/pet status', () => {
     })
   })
 
+  it('counts the treats earned', () => {
+    expect(
+      petCommand('status', { pet: MOCHI, needs: NEEDS, treats: 2 }, NOW),
+    ).toMatchObject({
+      reply: expect.stringContaining('Treats saved: 2.'),
+    })
+  })
+
   it('brings the needs up to now first', () => {
     expect(petCommand('status', HOME, NOW + 8 * 60 * 60_000)).toMatchObject({
       reply: expect.stringContaining('Hunger 0,'),

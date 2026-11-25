@@ -11,6 +11,8 @@ import {
   MIN_WALK_COLUMNS,
   nextSpell,
   poseAt,
+  REACTION_MS,
+  reactionSpell,
   seededRandom,
   spellEndsAt,
   thinkingOf,
@@ -511,5 +513,94 @@ describe('doneWorking', () => {
 
   it('leaves anything else alone', () => {
     expect(doneWorking(WALK, 1200)).toBe(WALK)
+  })
+})
+
+describe('reactionSpell', () => {
+  it.each(['worried', 'celebrating', 'confused'] as const)(
+    '%s plays where the pet is, and lasts about five seconds',
+    reaction => {
+      const spell = reactionSpell(reaction, WALK, 1480, 1)
+
+      expect(spell).toMatchObject({
+        behaviour: reaction,
+        fromX: 7,
+        toX: 7,
+        facing: 'left',
+      })
+      expect(spellEndsAt(spell) - 1480).toBe(REACTION_MS)
+      expect(poseAt(spell, 1480)).toMatchObject({ behaviour: reaction, isMoving: true })
+    },
+  )
+
+  it('moves a while, then holds still for the rest', () => {
+    const spell = reactionSpell('worried', null, 0, 1)
+
+    expect(spell.playMs).toBeLessThan(REACTION_MS)
+    expect(poseAt(spell, spell.playMs)).toMatchObject({
+      behaviour: 'worried',
+      frame: 0,
+      isMoving: false,
+      nextAt: REACTION_MS,
+    })
+  })
+
+  it('more trouble in the same turn keeps it worried for longer', () => {
+    const once = reactionSpell('worried', null, 0, 1)
+    const twice = reactionSpell('worried', once, 1000, 2)
+    const often = reactionSpell('worried', twice, 2000, 9)
+
+    expect(spellEndsAt(twice) - 1000).toBeGreaterThan(REACTION_MS)
+    expect(spellEndsAt(often) - 2000).toBeGreaterThan(spellEndsAt(twice) - 1000)
+    expect(spellEndsAt(often) - 2000).toBeLessThanOrEqual(3 * REACTION_MS)
+  })
+
+  it('a win or confusion lasts the same however much trouble came before', () => {
+    expect(spellEndsAt(reactionSpell('celebrating', null, 0, 4))).toBe(REACTION_MS)
+  })
+
+  it('gives way to care playing (ADR-0005)', () => {
+    const eating = careSpell('eating', null, 0)
+
+    expect(reactionSpell('worried', eating, 100, 1)).toBe(eating)
+  })
+
+  it('is cut short by care', () => {
+    const worried = reactionSpell('worried', null, 0, 1)
+
+    expect(careSpell('beingPetted', worried, 100).behaviour).toBe('beingPetted')
+  })
+
+  it('outranks curiosity and thinking while it lasts', () => {
+    const worried = reactionSpell('worried', null, 0, 1)
+    const work: Work = { thinking: 'sniffing', since: 0 }
+
+    expect(curiousSpell(worried, 100, 30, false)).toBe(worried)
+    expect(workSpell(worried, 100, work, 60, always(0.5))).toBe(worried)
+    expect(doneWorking(worried, 100)).toBe(worried)
+    expect(wanderOff(worried, 100)).toBe(worried)
+  })
+
+  it('cuts curiosity and thinking short', () => {
+    const watching = curiousSpell(null, 0, 30, false)
+    const sniffing = workSpell(
+      null,
+      0,
+      { thinking: 'sniffing', since: 0 },
+      60,
+      always(0.5),
+    )
+
+    expect(reactionSpell('confused', watching, 100, 0).behaviour).toBe('confused')
+    expect(reactionSpell('worried', sniffing, 100, 1).behaviour).toBe('worried')
+  })
+
+  it('once over, thinking picks up again', () => {
+    const worried = reactionSpell('worried', null, 0, 1)
+    const work: Work = { thinking: 'sniffing', since: 0 }
+
+    expect(workSpell(worried, REACTION_MS, work, 60, always(0.5)).behaviour).toBe(
+      'sniffing',
+    )
   })
 })

@@ -8,6 +8,8 @@ import {
   isTired,
   passTime,
   petting,
+  troubled,
+  won,
   storedNeeds,
   type Needs,
 } from './needs'
@@ -145,5 +147,25 @@ describe('petting', () => {
 
   it('never past 100', () => {
     expect(petting({ ...FULL, happiness: 95 }).happiness).toBe(100)
+  })
+})
+
+describe('troubled', () => {
+  it('makes the pet a little less happy', () => {
+    expect(troubled({ ...FULL, happiness: 50 })).toEqual({ ...FULL, happiness: 45 })
+  })
+
+  it('never under 0', () => {
+    expect(troubled({ ...FULL, happiness: 2 }).happiness).toBe(0)
+  })
+})
+
+describe('won', () => {
+  it('makes the pet happier', () => {
+    expect(won({ ...FULL, happiness: 50 })).toEqual({ ...FULL, happiness: 65 })
+  })
+
+  it('never past 100', () => {
+    expect(won({ ...FULL, happiness: 95 }).happiness).toBe(100)
   })
 })

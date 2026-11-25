@@ -1,3 +1,4 @@
 pnpm-lock.yaml
 docs/prototypes/
 .claude-plugin/types/
+.claude/worktrees/
