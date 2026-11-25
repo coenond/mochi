@@ -95,7 +95,7 @@ const FALLBACK_PET_COLUMNS = 24
 const FALLBACK_BOWL_COLUMNS = 6
 /**
  * The care controls: three dim glyphs with their hotkeys, one above the other at the
- * band's right edge (ADR-0008, ADR-0009). A terminal draws each as `p: ♥`; one more
+ * band's right edge (ADR-0008, ADR-0010). A terminal draws each as `p: ♥`; one more
  * column keeps the pet off them.
  */
 const CONTROLS_COLUMNS = 5
