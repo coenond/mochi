@@ -6,6 +6,10 @@ Feed it, pet it, give it treats you earned. It never makes a sound and never int
 
 > Work in progress. See `docs/specs/0001-mochi-v1.md` and the open issues.
 
+## Settings
+
+- **Model tone** (`modelTone`, off by default): Mochi reads the tone of what you write with local heuristics. Turn this on to have a small model read each prompt you send instead. Every call is billed to your Claude Code session and adds a short delay before Mochi reacts. When a call is not answered, Mochi falls back to the heuristics. Your draft is always read locally.
+
 ## Developing
 
 Mochi is a Claude Code mod. Install the tools with `pnpm install`; that also sets up the pre-commit hook.

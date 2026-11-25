@@ -1031,3 +1031,65 @@ test('the emote fades after a few seconds', async ($, on) => {
   expect(await ui.find({ key: 'pet:emote' })).toBeUndefined()
   await ui.unmount()
 })
+
+test(
+  'with model tone on, a small model reads the prompt sent (ADR-0002)',
+  { options: { modelTone: true } },
+  async ($, on) => {
+    const clock = mock.clock(on)
+    sends(on)
+    const asked: string[] = []
+    on('model.classify', (_, e) => {
+      asked.push(e.text)
+      return 'happy'
+    })
+    await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+    await send($, 'rename foo to bar')
+    await clock.advance(1)
+
+    expect(asked).toEqual(['rename foo to bar'])
+    expect(allSvgsOf('wagging')).toContain(await petSource(ui))
+    await ui.unmount()
+  },
+)
+
+test(
+  'model tone falls back to the heuristics when the call is not answered',
+  { options: { modelTone: true } },
+  async ($, on) => {
+    const clock = mock.clock(on)
+    sends(on)
+    on('model.classify', () => {
+      throw new Error('api-error')
+    })
+    await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+    const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+    await send($, 'great, thanks')
+    await clock.advance(1)
+
+    expect(allSvgsOf('wagging')).toContain(await petSource(ui))
+    await ui.unmount()
+  },
+)
+
+test('model tone is off by default: no model is asked', async ($, on) => {
+  const clock = mock.clock(on)
+  sends(on)
+  let isAsked = false
+  on('model.classify', () => {
+    isAsked = true
+    return 'happy'
+  })
+  await startSession($, on, { pet: MOCHI, needs: needs(clock.now(), {}) })
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await send($, 'great, thanks')
+  await clock.advance(1)
+
+  expect(isAsked).toBe(false)
+  expect(allSvgsOf('wagging')).toContain(await petSource(ui))
+  await ui.unmount()
+})

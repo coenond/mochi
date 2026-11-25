@@ -39,6 +39,8 @@ _Avoid_: speech bubble, message, notification
 **Tone**: the mood of what the owner writes: happy, angry, sad or neutral.
 _Avoid_: sentiment, emotion
 
+**Model tone**: the owner's setting, off by default, to have a small model read the tone of each prompt they send instead of the pet guessing it on its own.
+
 **Trouble**: something going wrong in the session, such as a failing tool call or command.
 _Avoid_: error (too technical), failure
 
